@@ -18,9 +18,10 @@ import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 import time
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
+
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 
 OUTPUT_FILE = "data/weather/weather_features_hourly.csv"
