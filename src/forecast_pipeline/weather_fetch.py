@@ -17,6 +17,7 @@ import requests
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone, timedelta
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -184,6 +185,8 @@ def main():
         print(f"  {region_name:20} ... ", end="", flush=True)
 
         raw = get_weather_48h(api_location, WEATHER_API_KEY)
+        time.sleep(1.5)
+        
         if raw is None:
             print("SKIP")
             continue
