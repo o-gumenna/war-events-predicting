@@ -4,9 +4,9 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 API_USER = os.getenv("API_USER")
 API_KEY = os.getenv("API_KEY")
