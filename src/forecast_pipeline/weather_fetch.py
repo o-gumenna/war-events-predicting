@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
-API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+WEATHER_API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
 
 OUTPUT_FILE = "data/weather/weather_features_hourly.csv"
 
@@ -169,7 +169,7 @@ def main():
     print("=" * 60)
 
     # Check for the presence of the API access key
-    if not API_KEY:
+    if not WEATHER_API_KEY:
         print("ERROR: API_KEY is not configured.")
         return
 
@@ -183,7 +183,7 @@ def main():
     for api_location, region_name in CITIES_MAPPING.items():
         print(f"  {region_name:20} ... ", end="", flush=True)
 
-        raw = get_weather_48h(api_location, API_KEY)
+        raw = get_weather_48h(api_location, WEATHER_API_KEY)
         if raw is None:
             print("SKIP")
             continue
