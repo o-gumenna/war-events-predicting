@@ -186,7 +186,7 @@ def main():
 
         raw = get_weather_48h(api_location, WEATHER_API_KEY)
         time.sleep(1.5)
-        
+
         if raw is None:
             print("SKIP")
             continue
