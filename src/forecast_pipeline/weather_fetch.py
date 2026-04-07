@@ -20,7 +20,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
-WEATHER_API_KEY = os.getenv("VISUAL_CROSSING_API_KEY")
+WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
 
 OUTPUT_FILE = "data/weather/weather_features_hourly.csv"
 
