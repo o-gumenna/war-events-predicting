@@ -14,7 +14,7 @@ API_KEY = os.getenv("API_KEY")
 ALERTS_URL = "https://api.ukrainealarm.com/api/v3/alerts"
 REGIONS_URL = "https://api.ukrainealarm.com/api/v3/regions"
 
-RAW_OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "data", "alarms", "alarms_raw.json")
+RAW_OUTPUT_PATH = "data/alarms/alarms_raw.json"
 
 OBLAST_UA_TO_EN = {
     "Черкаська область":          "Cherkasy",

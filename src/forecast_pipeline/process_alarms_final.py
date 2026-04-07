@@ -5,9 +5,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-BASE_DIR = os.path.dirname(__file__)
-INPUT_PATH  = os.path.join(BASE_DIR, "data", "alarms", "alarms_raw.json")
-OUTPUT_PATH = os.path.join(BASE_DIR, "data", "alarms", "alarms_features.csv")
+INPUT_PATH  = "data/alarms/alarms_raw.json"
+OUTPUT_PATH = "data/alarms/alarms_features.csv"
 
 ALL_REGIONS = [
     "Cherkasy", "Chernihiv", "Chernivtsi", "Dnipro", "Donetsk",
