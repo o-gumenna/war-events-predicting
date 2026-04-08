@@ -451,58 +451,65 @@ def main() -> None:
         log.error("Could not locate report URL. Exiting.")
         return
     log.info("Report URL: %s", report_url)
-    time.sleep(REQUEST_DELAY)
 
+    cache = load_cache()
+
+    # old report
+    if cache.get("report_url") == report_url and "geo_feats" in cache and "lag_roll" in cache:
+        log.info("Report is unchanged. Rebuilding 24h grid from cache...")
+        rows = build_hourly_rows(
+            report_date_str=cache["last_report_date"],
+            publish_hour_utc=cache.get("publish_hour", 20),
+            geo_feats=cache["geo_feats"],
+            lag_roll_feats=cache["lag_roll"],
+        )
+        save_outputs(rows)
+        log.info("=== Done (Cached). Grid shifted to current time ===")
+        return
+
+    # new report published
+    time.sleep(REQUEST_DELAY)
     report = scrape_report(report_url)
     if not report:
         log.error("Could not scrape report. Exiting.")
         return
 
-    # Exit early if the report date has not changed since the last run
-    cache = load_cache()
-    if cache.get("last_report_date") == report["date"]:
-        log.info("Report dated %s already processed. Exiting.", report["date"])
-        return
     log.info("New report: %s. Processing...", report["date"])
 
-    raw_text     = report["text"]
-    cleaned      = clean_text(raw_text)
+    raw_text = report["text"]
+    cleaned = clean_text(raw_text)
     publish_hour = extract_publish_hour_utc(raw_text)
 
     today_threats = score_tfidf(cleaned)
     log.info("Threat scores: %s", {k: f"{v:.5f}" for k, v in today_threats.items()})
 
     geo_feats = extract_geo_features(raw_text)
-    log.info(
-        "Geo: %d unique locations — %s",
-        geo_feats["isw_geo_unique_locations"],
-        [c.replace("isw_", "") for c, v in geo_feats.items()
-         if v == 1 and c != "isw_geo_unique_locations"],
-    )
 
-    history  = load_history()
+    history = load_history()
     lag_roll = compute_lag_roll_features(today_threats, history)
 
     rows = build_hourly_rows(
-        report_date_str  = report["date"],
-        publish_hour_utc = publish_hour,
-        geo_feats        = geo_feats,
-        lag_roll_feats   = lag_roll,
+        report_date_str=report["date"],
+        publish_hour_utc=publish_hour,
+        geo_feats=geo_feats,
+        lag_roll_feats=lag_roll,
     )
 
     save_outputs(rows)
 
-    # Append today's scores to the rolling history for future lag computation
     history.append({"date": report["date"], **today_threats})
     save_history(history)
 
     save_cache({
         "last_report_date": report["date"],
-        "last_run_utc":     datetime.now(timezone.utc).isoformat(),
-        "report_url":       report_url,
+        "last_run_utc": datetime.now(timezone.utc).isoformat(),
+        "report_url": report_url,
+        "publish_hour": publish_hour,
+        "geo_feats": geo_feats,
+        "lag_roll": lag_roll
     })
 
-    log.info("=== Done. Report %s → %d rows for next 24h ===", report["date"], len(rows))
+    log.info("=== Done (New). Report %s → %d rows for next 24h ===", report["date"], len(rows))
 
 
 if __name__ == "__main__":
