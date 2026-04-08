@@ -5,15 +5,17 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 
-# Завантажуємо ключі з .env
-load_dotenv(find_dotenv())
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+ENV_PATH = ROOT_DIR / ".env"
+
+load_dotenv(ENV_PATH)
 
 API_USER = os.getenv("API_USER")
 API_KEY = os.getenv("API_KEY")
 
 ALERTS_URL = "https://api.ukrainealarm.com/api/v3/alerts"
 REGIONS_URL = "https://api.ukrainealarm.com/api/v3/regions"
-HISTORY_FILE = "data/alarms/alarms_history_raw.csv"
+HISTORY_FILE = ROOT_DIR / "data/alarms/alarms_history_raw.csv"
 
 OBLAST_UA_TO_EN = {
     "Черкаська область": "Cherkasy", "Чернігівська область": "Chernihiv",
