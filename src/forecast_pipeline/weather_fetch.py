@@ -167,7 +167,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def main():
     print("=" * 60)
-    print("  WEATHER FEATURES COLLECTION AND GENERATION")
+    print("WEATHER FEATURES COLLECTION AND GENERATION")
     print("=" * 60)
 
     # Check for the presence of the API access key

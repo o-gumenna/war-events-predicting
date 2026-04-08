@@ -1,174 +1,114 @@
-import requests
-import json
 import os
-import sys
-from datetime import datetime, timezone
+import requests
+import pandas as pd
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 
+# Завантажуємо ключі з .env
 load_dotenv(find_dotenv())
 
-API_USER = os.getenv("API_USER")
-API_KEY = os.getenv("API_KEY")
+API_USER = os.getenv("ALARM_API_USER")
+API_KEY = os.getenv("ALARM_API_KEY")
 
 ALERTS_URL = "https://api.ukrainealarm.com/api/v3/alerts"
 REGIONS_URL = "https://api.ukrainealarm.com/api/v3/regions"
-
-RAW_OUTPUT_PATH = "data/alarms/alarms_raw.json"
+HISTORY_FILE = "data/alarms/alarms_history_raw.csv"
 
 OBLAST_UA_TO_EN = {
-    "Черкаська область":          "Cherkasy",
-    "Чернігівська область":       "Chernihiv",
-    "Чернівецька область":        "Chernivtsi",
-    "Дніпропетровська область":   "Dnipro",
-    "Донецька область":           "Donetsk",
-    "Івано-Франківська область":  "Ivano-Frankivsk",
-    "Харківська область":         "Kharkiv",
-    "Херсонська область":         "Kherson",
-    "Хмельницька область":        "Khmelnytskyi",
-    "Кіровоградська область":     "Kropyvnytskyi",
-    "Київська область":           "Kyiv",
-    "Волинська область":          "Lutsk",
-    "Львівська область":          "Lviv",
-    "Миколаївська область":       "Mykolaiv",
-    "Одеська область":            "Odesa",
-    "Полтавська область":         "Poltava",
-    "Рівненська область":         "Rivne",
-    "Сумська область":            "Sumy",
-    "Тернопільська область":      "Ternopil",
-    "Закарпатська область":       "Uzhhorod",
-    "Вінницька область":          "Vinnytsia",
-    "Запорізька область":         "Zaporizhzhia",
-    "Житомирська область":        "Zhytomyr",
-    "м. Київ":                    "Kyiv",
-    "Луганська область":          "Luhansk",
+    "Черкаська область": "Cherkasy", "Чернігівська область": "Chernihiv",
+    "Чернівецька область": "Chernivtsi", "Дніпропетровська область": "Dnipro",
+    "Донецька область": "Donetsk", "Івано-Франківська область": "Ivano-Frankivsk",
+    "Харківська область": "Kharkiv", "Херсонська область": "Kherson",
+    "Хмельницька область": "Khmelnytskyi", "Кіровоградська область": "Kropyvnytskyi",
+    "Київська область": "Kyiv", "Волинська область": "Lutsk",
+    "Львівська область": "Lviv", "Миколаївська область": "Mykolaiv",
+    "Одеська область": "Odesa", "Полтавська область": "Poltava",
+    "Рівненська область": "Rivne", "Сумська область": "Sumy",
+    "Тернопільська область": "Ternopil", "Закарпатська область": "Uzhhorod",
+    "Вінницька область": "Vinnytsia", "Запорізька область": "Zaporizhzhia",
+    "Житомирська область": "Zhytomyr", "м. Київ": "Kyiv", "Луганська область": "Luhansk"
 }
 
-ALL_REGIONS = [
-    "Cherkasy", "Chernihiv", "Chernivtsi", "Dnipro", "Donetsk",
-    "Ivano-Frankivsk", "Kharkiv", "Kherson", "Khmelnytskyi", "Kropyvnytskyi",
-    "Kyiv", "Lutsk", "Lviv", "Mykolaiv", "Odesa", "Poltava", "Rivne",
-    "Sumy", "Ternopil", "Uzhhorod", "Vinnytsia", "Zaporizhzhia", "Zhytomyr"
-]
+ALL_REGIONS = sorted(list(set(OBLAST_UA_TO_EN.values())))
 
 
 def build_region_id_map() -> dict:
-    """
-    Будує маппінг regionId → англійська назва області.
-    Завантажує ієрархію з /regions і маппить кожен район/громаду
-    до батьківської області.
-    """
     headers = {"Authorization": f"{API_USER}:{API_KEY}"}
     try:
         r = requests.get(REGIONS_URL, headers=headers, timeout=10)
         r.raise_for_status()
-        if not r.text:
-            return {}
-        data = r.json()
+        id_to_en = {}
+        for state in r.json().get("states", []):
+            oblast_en = OBLAST_UA_TO_EN.get(state["regionName"])
+            if oblast_en:
+                id_to_en[str(state["regionId"])] = oblast_en
+                for district in state.get("regionChildIds", []):
+                    id_to_en[str(district["regionId"])] = oblast_en
+                    for community in district.get("regionChildIds", []):
+                        id_to_en[str(community["regionId"])] = oblast_en
+        return id_to_en
     except Exception as e:
         print(f"Error loading regions: {e}")
         return {}
 
-    id_to_en = {}
-    for state in data.get("states", []):
-        oblast_ua   = state["regionName"]
-        oblast_en   = OBLAST_UA_TO_EN.get(oblast_ua)
-        if not oblast_en:
-            continue
 
-        id_to_en[str(state["regionId"])] = oblast_en
+def collect_alarms():
+    if not API_USER or not API_KEY:
+        print("ERROR: ALARM_API_USER or ALARM_API_KEY is missing.")
+        return
 
-        for district in state.get("regionChildIds", []):
-            id_to_en[str(district["regionId"])] = oblast_en
+    now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    print(f"[{now_utc}] Fetching 5-min alarm snapshot...")
 
-            for community in district.get("regionChildIds", []):
-                id_to_en[str(community["regionId"])] = oblast_en
+    id_map = build_region_id_map()
+    if not id_map: return
 
-    print(f"Region map built: {len(id_to_en)} entries")
-    return id_to_en
-
-
-def get_current_alarms() -> list:
     headers = {"Authorization": f"{API_USER}:{API_KEY}"}
     try:
         r = requests.get(ALERTS_URL, headers=headers, timeout=10)
         r.raise_for_status()
-        if not r.text:
-            print("Empty response from API")
-            return []
-        return r.json()
+        alerts_data = r.json()
     except Exception as e:
-        print(f"API request error: {e}")
-        return []
+        print(f"API Error: {e}")
+        return
 
+    # Визначаємо активні регіони
+    active_regions = set()
+    for region in alerts_data:
+        oblast_en = id_map.get(str(region.get("regionId", "")))
+        if oblast_en and any(a.get("type") == "AIR" for a in region.get("activeAlerts", [])):
+            active_regions.add(oblast_en)
 
-def parse_active_regions(alerts: list, id_map: dict) -> list:
-    """
-    Визначає які області мають активну AIR тривогу.
-    Будь-який район/громада з AIR тривогою → вся область має тривогу.
-    """
-    active = set()
-    for region in alerts:
-        region_id  = str(region.get("regionId", ""))
-        oblast_en  = id_map.get(region_id)
-        if not oblast_en:
-            continue
-        alerts_list = region.get("activeAlerts", [])
-        has_air = any(a.get("type") == "AIR" for a in alerts_list)
-        if has_air:
-            active.add(oblast_en)
+    # Формуємо поточний знімок
+    new_rows = []
+    for city in ALL_REGIONS:
+        new_rows.append({
+            "datetime": now_utc.isoformat(),
+            "city": city,
+            "alarm": 1 if city in active_regions else 0
+        })
+    df_new = pd.DataFrame(new_rows)
 
-    # фільтруємо тільки регіони які є в нашому датасеті
-    return sorted([r for r in active if r in ALL_REGIONS])
-
-
-def save_alarms(active_regions: list, raw_data: list):
-    path = Path(RAW_OUTPUT_PATH)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    records = []
+    # Читаємо історію, дописуємо нове, відрізаємо старе (залишаємо 48 годин)
+    path = Path(HISTORY_FILE)
     if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            try:
-                records = json.load(f)
-            except json.JSONDecodeError:
-                records = []
+        df_hist = pd.read_csv(path)
+    else:
+        df_hist = pd.DataFrame()
 
-    record = {
-        "collected_at":    datetime.now(timezone.utc).isoformat(),
-        "active_regions":  active_regions,
-        "active_count":    len(active_regions),
-        "raw_api_data":    raw_data
-    }
-    records.append(record)
+    df_full = pd.concat([df_hist, df_new], ignore_index=True)
+    df_full["datetime"] = pd.to_datetime(df_full["datetime"], utc=True)
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(records, f, ensure_ascii=False, indent=2)
+    cutoff_time = now_utc - timedelta(hours=48)
+    df_full = df_full[df_full["datetime"] >= cutoff_time]
 
-    print(f"Saved to {RAW_OUTPUT_PATH}")
+    df_full = df_full.sort_values(["city", "datetime"]).drop_duplicates()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df_full.to_csv(path, index=False)
+    print(f"Saved snapshot. Total history rows: {len(df_full)}")
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print(f"Collecting alarms at {datetime.now(timezone.utc).isoformat()}...")
-    print("=" * 60)
-
-    # Перевірка наявності ключів перед початком запитів
-    if not API_USER or not API_KEY:
-        print("FATAL ERROR: ALARM_API_USER or ALARM_API_KEY is not set in .env file!")
-        sys.exit(1)
-
-    id_map = build_region_id_map()
-    if not id_map:
-        print("Failed to build region map!")
-        sys.exit(1)
-
-    alerts = get_current_alarms()
-    if not alerts:
-        print("No alerts data received!")
-        sys.exit(1)
-
-    active = parse_active_regions(alerts, id_map)
-    print(f"Active AIR alarms ({len(active)} regions): {active}")
-
-    save_alarms(active, alerts)
+    collect_alarms()
