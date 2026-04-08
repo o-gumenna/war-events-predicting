@@ -22,6 +22,7 @@ from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
 from telethon.sync import TelegramClient
 
+
 load_dotenv(find_dotenv())
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -82,7 +83,6 @@ THREAT_PATTERNS = {
 
 FEATURE_THREATS = ['shaheds', 'ballistic', 'mig31', 'cruise']
 
-# ── TIME UTILS ────────────────────────────────────────────────────────────────
 
 def convert_to_utc(dt_naive):
     kyiv_tz = pytz.timezone('Europe/Kyiv')
@@ -109,14 +109,16 @@ def extract_cities(text):
     return found if found else ALL_CITIES
 
 # ── SCRAPE ────────────────────────────────────────────────────────────────────
-
+                
 async def scrape():
     now_utc = datetime.now(timezone.utc)
     limit = now_utc - timedelta(hours=SCRAPE_LOOKBACK_HOURS)
 
     messages = []
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    session_path = os.path.join(script_dir, 'alarm_session')
 
-    async with TelegramClient('session', API_ID, API_HASH) as client:
+    async with TelegramClient(session_path, API_ID, API_HASH) as client:
         async for msg in client.iter_messages(CHANNEL_USERNAME):
             if msg.date < limit:
                 break

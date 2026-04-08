@@ -8,12 +8,12 @@ logs/
 # ML models
 models/*.pkl
 
-# 4. Секретні файли (API ключі)
-# Використовується для зберігання ключа Visual Crossing API або паролів бази даних
-.env
+# keys
+*.session
 secret_keys.json
 
-# 5. Системні файли та кеш Python
+
+# sys Python
 __pycache__/
 *.pyc
 .DS_Store
