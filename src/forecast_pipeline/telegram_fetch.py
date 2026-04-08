@@ -73,11 +73,12 @@ CITY_PATTERNS = {
 
 ALL_CITIES = sorted(CITY_PATTERNS.keys())
 
+
 THREAT_PATTERNS = {
-    'shaheds': r'\b(?:шахед|дрон)\w*',
-    'ballistic': r'\b(?:баліст)\w*',
-    'mig31': r'\b(?:міг-31|кинджал)\w*',
-    'cruise': r'\b(?:крилат|ракет)\w*',
+    'shaheds': r'\b(?:шахед|дрон|бпла|герань|мопед|безпілотник|камікадзе|shahed)\w*',
+    'ballistic': r'\b(?:баліст|іскандер|с-300|с-400|оперативно-тактичн|швидкісн)\w*',
+    'mig31': r'\b(?:міг-31|кинджал|саваслейка|моздок|аеробалістич)\w*',
+    'cruise': r'\b(?:крилат|ракет|калібр|ту-95|ту-22|х-101|х-555|х-59|х-22|х-47)\w*',
     'all_clear': r'\b(?:відбій)\w*',
 }
 
@@ -99,7 +100,7 @@ def clean_text(text):
         return ''
     text = text.lower()
     text = re.sub(r'http\S+|www\S+|@\w+', '', text)
-    text = re.sub(r'[^а-яіїєґa-z\s]', ' ', text)
+    text = re.sub(r'[^а-яіїєґa-z0-9\s]', ' ', text)
     return text
 
 def extract_cities(text):
