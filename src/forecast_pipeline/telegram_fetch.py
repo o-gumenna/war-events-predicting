@@ -109,7 +109,7 @@ def extract_cities(text):
     return found if found else ALL_CITIES
 
 # ── SCRAPE ────────────────────────────────────────────────────────────────────
-                
+
 async def scrape():
     now_utc = datetime.now(timezone.utc)
     limit = now_utc - timedelta(hours=SCRAPE_LOOKBACK_HOURS)

@@ -9,6 +9,7 @@ logs/
 models/*.pkl
 
 # keys
+.env
 *.session
 secret_keys.json
 
