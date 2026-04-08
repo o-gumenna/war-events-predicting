@@ -100,7 +100,7 @@ def collect_alarms():
         df_hist = pd.DataFrame()
 
     df_full = pd.concat([df_hist, df_new], ignore_index=True)
-    df_full["datetime"] = pd.to_datetime(df_full["datetime"], utc=True)
+    df_full["datetime"] = pd.to_datetime(df_full["datetime"], format='mixed', utc=True)
 
     cutoff_time = now_utc - timedelta(hours=48)
     df_full = df_full[df_full["datetime"] >= cutoff_time]
