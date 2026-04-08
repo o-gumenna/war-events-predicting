@@ -170,15 +170,17 @@ def collect_raw_data():
     # Load old data
     if RAW_FILE.exists():
         old = pd.read_csv(RAW_FILE)
-        old['datetime'] = pd.to_datetime(old['datetime'], utc=True)
+        old['datetime'] = pd.to_datetime(old['datetime'], utc=True).dt.tz_localize(None)
         agg = pd.concat([old, agg], ignore_index=True)
 
     # Remove duplicates
     agg = agg.drop_duplicates(['datetime', 'city'], keep='last')
 
     # Keep 48h
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     cutoff = now_utc - timedelta(hours=RAW_HISTORY_HOURS)
+
+    agg['datetime'] = pd.to_datetime(agg['datetime']).dt.tz_localize(None)
     agg = agg[agg['datetime'] >= cutoff]
 
     # Fill grid
