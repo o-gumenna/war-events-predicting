@@ -8,8 +8,8 @@ from dotenv import load_dotenv, find_dotenv
 # Завантажуємо ключі з .env
 load_dotenv(find_dotenv())
 
-API_USER = os.getenv("ALARM_API_USER")
-API_KEY = os.getenv("ALARM_API_KEY")
+API_USER = os.getenv("API_USER")
+API_KEY = os.getenv("API_KEY")
 
 ALERTS_URL = "https://api.ukrainealarm.com/api/v3/alerts"
 REGIONS_URL = "https://api.ukrainealarm.com/api/v3/regions"

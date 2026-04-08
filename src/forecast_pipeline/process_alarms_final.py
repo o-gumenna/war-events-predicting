@@ -48,7 +48,7 @@ def process_alarms():
 
     # 4. ВИЗНАЧАЄМО МЕЖІ ЧАСУ
     # Поточний час Т (остання повністю закрита година)
-    T = now_utc.floor("h") - timedelta(hours=1)
+    T = now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
 
     forecast_start = T + timedelta(hours=1)
     forecast_end = T + timedelta(hours=24)
@@ -60,43 +60,40 @@ def process_alarms():
 
     df = df_grid.merge(df, on=["city", "datetime"], how="left")
 
-    # Майбутнє заповнюється нулями
-    df["alarm"] = df["alarm"].fillna(0).astype(int)
-    df["events_in_hour"] = df["events_in_hour"].fillna(0).astype(int)
+    # ВИДАЛЕНО: df["alarm"] = df["alarm"].fillna(0).astype(int)
+    # Майбутнє залишається як NaN !
 
     # Рахуємо активні регіони по всій Україні
-    active_per_hour = df.groupby("datetime")["alarm"].sum().reset_index()
+    # Додаємо min_count=1, щоб для майбутніх годин (де всі міста NaN) сума теж була NaN, а не 0
+    active_per_hour = df.groupby("datetime")["alarm"].sum(min_count=1).reset_index()
     active_per_hour.rename(columns={"alarm": "active_regions_count"}, inplace=True)
     df = df.merge(active_per_hour, on="datetime", how="left")
     df = df.sort_values(["city", "datetime"]).reset_index(drop=True)
 
-    # 6. РАХУЄМО ЛАГИ І РОЛЛІНГИ (Тепер вони бездоганно спадають у майбутнє)
-    df["alarm_lag_1h"] = df.groupby("city")["alarm"].shift(1).fillna(0).astype(int)
-    df["alarm_lag_3h"] = df.groupby("city")["alarm"].shift(3).fillna(0).astype(int)
-    df["alarm_lag_6h"] = df.groupby("city")["alarm"].shift(6).fillna(0).astype(int)
-    df["alarm_lag_24h"] = df.groupby("city")["alarm"].shift(24).fillna(0).astype(int)
+    # 6. РАХУЄМО ЛАГИ І РОЛЛІНГИ (Без .fillna(0) та .astype(int))
+    # Тепер лаги, які "зазирають" у майбутнє, автоматично ставатимуть NaN
+    df["alarm_lag_1h"] = df.groupby("city")["alarm"].shift(1)
+    df["alarm_lag_3h"] = df.groupby("city")["alarm"].shift(3)
+    df["alarm_lag_6h"] = df.groupby("city")["alarm"].shift(6)
+    df["alarm_lag_24h"] = df.groupby("city")["alarm"].shift(24)
 
-    df["active_regions_count_lag1h"] = df.groupby("city")["active_regions_count"].shift(1).fillna(0).astype(int)
-    df["active_regions_count_lag3h"] = df.groupby("city")["active_regions_count"].shift(3).fillna(0).astype(int)
-    df["active_regions_count_lag6h"] = df.groupby("city")["active_regions_count"].shift(6).fillna(0).astype(int)
+    df["active_regions_count_lag1h"] = df.groupby("city")["active_regions_count"].shift(1)
+    df["active_regions_count_lag3h"] = df.groupby("city")["active_regions_count"].shift(3)
+    df["active_regions_count_lag6h"] = df.groupby("city")["active_regions_count"].shift(6)
 
-    df.index = pd.DatetimeIndex(df["datetime"])
-
-    # Сума годин з тривогами за останні 24г
+    # Роллінги теж залишаємо "як є".
+    # Pandas рахуватиме суму відомих годин. Якщо все вікно складається з NaN, результат буде NaN.
     df["alarm_hours_last_24h"] = (
         df.groupby("city")["alarm"]
-        .transform(lambda x: x.rolling("24h", closed="left").sum())
-    ).values
+        .transform(lambda x: x.shift(1).rolling(24, min_periods=1).sum())
+    )
 
-    # Сума запусків сирен за останні 24г
     df["alarm_events_last_24h"] = (
         df.groupby("city")["events_in_hour"]
-        .transform(lambda x: x.rolling("24h", closed="left").sum())
-    ).values
+        .transform(lambda x: x.shift(1).rolling(24, min_periods=1).sum())
+    )
 
-    df = df.reset_index(drop=True)
-    df["alarm_hours_last_24h"] = df["alarm_hours_last_24h"].fillna(0).astype(int)
-    df["alarm_events_last_24h"] = df["alarm_events_last_24h"].fillna(0).astype(int)
+    # ВИДАЛЕНО: примусове заповнення нулями для роллінгів
 
     # 7. ВІДРІЗАЄМО МАЙБУТНЄ І ЗБЕРІГАЄМО
     df_forecast = df[(df["datetime"] >= forecast_start) & (df["datetime"] <= forecast_end)].copy()
