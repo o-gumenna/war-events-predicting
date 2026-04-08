@@ -68,6 +68,8 @@ def process_alarms():
     active_per_hour = df.groupby("datetime")["alarm"].sum(min_count=1).reset_index()
     active_per_hour.rename(columns={"alarm": "active_regions_count"}, inplace=True)
     df = df.merge(active_per_hour, on="datetime", how="left")
+
+    df.loc[df["datetime"] > T, ["alarm", "events_in_hour", "active_regions_count"]] = float('nan')
     df = df.sort_values(["city", "datetime"]).reset_index(drop=True)
 
     # 6. РАХУЄМО ЛАГИ І РОЛЛІНГИ (Без .fillna(0) та .astype(int))
