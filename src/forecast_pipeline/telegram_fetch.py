@@ -25,7 +25,6 @@ import os
 import re
 import logging
 import asyncio
-import pytz
 import pandas as pd
 import requests
 from datetime import datetime, timezone, timedelta
@@ -153,14 +152,7 @@ def count_threat(text, keywords):
     return int(any(kw in text for kw in keywords))
 
 
-def convert_to_utc(dt_naive):
-    """Convert naive Kyiv datetime to UTC."""
-    kyiv_tz = pytz.timezone('Europe/Kyiv')
-    try:
-        dt_localized = kyiv_tz.localize(dt_naive, is_dst=None)
-    except (pytz.exceptions.AmbiguousTimeError, pytz.exceptions.NonExistentTimeError):
-        dt_localized = kyiv_tz.localize(dt_naive, is_dst=False)
-    return dt_localized.astimezone(pytz.UTC).replace(tzinfo=None)
+
 
 
 # ── Telegram Scraping ─────────────────────────────────────────────────────────
@@ -193,8 +185,8 @@ async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
                 if not message.text:
                     continue
 
-                date_kyiv = message.date.replace(tzinfo=None)
-                date_utc = convert_to_utc(date_kyiv)
+                # message.date from Telethon is already UTC-aware; strip tz to get naive UTC
+                date_utc = message.date.replace(tzinfo=None)
 
                 text_clean = clean_text(message.text, stopwords)
                 if not text_clean:
@@ -265,9 +257,7 @@ def collect_raw_data():
     log.info("STAGE 1: COLLECTING RAW TELEGRAM DATA")
     log.info("=" * 60)
 
-    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-
-    # Get stopwords
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
     stopwords = get_ukrainian_stopwords()
 
     # Scrape recent messages
@@ -366,7 +356,7 @@ def generate_features():
     df_raw = pd.read_csv(RAW_FILE)
     df_raw['datetime'] = pd.to_datetime(df_raw['datetime'], utc=True).dt.tz_localize(None)
 
-    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0, tzinfo=None)
 
     log.info(f"Reference time (T=0): {now_utc}")
     log.info(f"Loaded {len(df_raw)} raw hourly records")
