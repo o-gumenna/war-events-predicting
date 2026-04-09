@@ -454,17 +454,24 @@ def main() -> None:
 
     cache = load_cache()
 
-    # old report
-    if cache.get("report_url") == report_url and "geo_feats" in cache and "lag_roll" in cache:
-        log.info("Report is unchanged. Rebuilding 24h grid from cache...")
+    # Якщо звіт не змінився — беремо geo_feats з кешу, але LAG/ROLL завжди
+    # перераховуємо з актуальної history (history могла поповнитись новими днями).
+    if cache.get("report_url") == report_url and "geo_feats" in cache:
+        log.info("Report is unchanged. Rebuilding 24h grid (lag/roll recalculated from fresh history)...")
+        history = load_history()
+        cached_threats = cache.get("today_threats", {})
+        lag_roll = compute_lag_roll_features(cached_threats, history)
         rows = build_hourly_rows(
             report_date_str=cache["last_report_date"],
             publish_hour_utc=cache.get("publish_hour", 20),
             geo_feats=cache["geo_feats"],
-            lag_roll_feats=cache["lag_roll"],
+            lag_roll_feats=lag_roll,
         )
         save_outputs(rows)
-        log.info("=== Done (Cached). Grid shifted to current time ===")
+        # Оновлюємо кеш з новим lag_roll
+        save_cache({**cache, "lag_roll": lag_roll,
+                    "last_run_utc": datetime.now(timezone.utc).isoformat()})
+        log.info("=== Done (Cached geo, fresh lag/roll). Grid shifted to current time ===")
         return
 
     # new report published
@@ -506,6 +513,7 @@ def main() -> None:
         "report_url": report_url,
         "publish_hour": publish_hour,
         "geo_feats": geo_feats,
+        "today_threats": today_threats,   # зберігаємо для перерахунку lag_roll при cache hit
         "lag_roll": lag_roll
     })
 

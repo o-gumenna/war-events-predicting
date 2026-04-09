@@ -14,7 +14,8 @@ ALL_REGIONS = [
 
 
 def process_alarms():
-    now_utc = datetime.now(timezone.utc)
+    # Стандарт: tz-aware UTC протягом усього пайплайну
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     print(f"[{now_utc.isoformat()}] Processing hourly features...")
 
     path = Path(INPUT_PATH)
@@ -24,6 +25,7 @@ def process_alarms():
 
     # 1. Завантажуємо 5-хвилинні факти
     df_raw = pd.read_csv(path)
+    # utc=True коректно обробляє і "+00:00" рядки, і naive рядки (інтерпретує як UTC)
     df_raw["datetime"] = pd.to_datetime(df_raw["datetime"], utc=True)
     df_raw = df_raw.sort_values(["city", "datetime"]).reset_index(drop=True)
 
@@ -47,11 +49,12 @@ def process_alarms():
     df.rename(columns={"datetime_h": "datetime"}, inplace=True)
 
     # 4. ВИЗНАЧАЄМО МЕЖІ ЧАСУ
-    # Поточний час Т (остання повністю закрита година)
-    T = now_utc.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    # T = поточна година (вже округлена вище в now_utc).
+    # Прогноз: T+1 .. T+24 — консистентно з усіма іншими скриптами пайплайну.
+    T = now_utc  # НЕ now_utc - 1h (та помилка давала зсув на 1 годину відносно weather/isw/telegram)
 
     forecast_start = T + timedelta(hours=1)
-    forecast_end = T + timedelta(hours=24)
+    forecast_end   = T + timedelta(hours=24)
 
     # 5. БУДУЄМО СІТКУ (Історія + 24 години майбутнього)
     full_range = pd.date_range(start=df["datetime"].min(), end=forecast_end, freq="h", tz="UTC")
@@ -59,9 +62,6 @@ def process_alarms():
     df_grid = pd.DataFrame(index=full_grid).reset_index()
 
     df = df_grid.merge(df, on=["city", "datetime"], how="left")
-
-    # ВИДАЛЕНО: df["alarm"] = df["alarm"].fillna(0).astype(int)
-    # Майбутнє залишається як NaN !
 
     # Рахуємо активні регіони по всій Україні
     # Додаємо min_count=1, щоб для майбутніх годин (де всі міста NaN) сума теж була NaN, а не 0

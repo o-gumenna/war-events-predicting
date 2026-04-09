@@ -29,7 +29,7 @@ OBLAST_UA_TO_EN = {
     "Рівненська область": "Rivne", "Сумська область": "Sumy",
     "Тернопільська область": "Ternopil", "Закарпатська область": "Uzhhorod",
     "Вінницька область": "Vinnytsia", "Запорізька область": "Zaporizhzhia",
-    "Житомирська область": "Zhytomyr", "м. Київ": "Kyiv", "Луганська область": "Luhansk"
+    "Житомирська область": "Zhytomyr", "м. Київ": "Kyiv"
 }
 
 ALL_REGIONS = sorted(list(set(OBLAST_UA_TO_EN.values())))
@@ -60,8 +60,9 @@ def collect_alarms():
         print("ERROR: ALARM_API_USER or ALARM_API_KEY is missing.")
         return
 
+    # tz-aware UTC — стандарт пайплайну
     now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    print(f"[{now_utc}] Fetching 5-min alarm snapshot...")
+    print(f"[{now_utc.isoformat()}] Fetching 5-min alarm snapshot...")
 
     id_map = build_region_id_map()
     if not id_map: return
@@ -100,7 +101,8 @@ def collect_alarms():
         df_hist = pd.DataFrame()
 
     df_full = pd.concat([df_hist, df_new], ignore_index=True)
-    df_full["datetime"] = pd.to_datetime(df_full["datetime"], format='mixed', utc=True)
+    # parse datetimes — utc=True коректно обробляє і "+00:00", і naive рядки
+    df_full["datetime"] = pd.to_datetime(df_full["datetime"], utc=True)
 
     cutoff_time = now_utc - timedelta(hours=48)
     df_full = df_full[df_full["datetime"] >= cutoff_time]

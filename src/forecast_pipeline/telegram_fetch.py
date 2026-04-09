@@ -90,8 +90,10 @@ THREAT_DICT = {
     'tg_all_clear': ['відбій'],
 }
 
-# Only feature threats (exclude all_clear)
+# Only feature threats (exclude all_clear from the "clean signal" step,
+# but include it in lag features since model expects tg_all_clear_count_lag1h/lag3h)
 FEATURE_THREATS = ['tg_shaheds', 'tg_ballistic', 'tg_mig31', 'tg_cruise']
+LAG_THREATS = FEATURE_THREATS + ['tg_all_clear']  # all_clear included in lag output
 
 
 # Text processing
@@ -177,8 +179,9 @@ async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
                 if msg_dt is None:
                     continue
 
-                # Minimal handling: drop tzinfo if present and treat as UTC
-                date_utc = msg_dt.replace(tzinfo=None)
+                # Minimal handling: Telethon повертає tz-aware datetime (UTC).
+                # Зберігаємо tz-aware UTC — стандарт пайплайну.
+                date_utc = msg_dt if msg_dt.tzinfo is not None else msg_dt.replace(tzinfo=timezone.utc)
 
                 if date_utc < limit_dt:
                     break
@@ -230,14 +233,18 @@ def process_messages_to_hourly(messages: list[dict]) -> pd.DataFrame:
     clear_mask = df_exploded['tg_all_clear'] == 1
     df_exploded.loc[clear_mask, FEATURE_THREATS] = 0
 
-    # Round to hour
-    df_exploded['datetime'] = pd.to_datetime(df_exploded['datetime']).dt.floor('h')
+    # Round to hour — зберігаємо tz-aware UTC
+    df_exploded['datetime'] = pd.to_datetime(df_exploded['datetime'], utc=True).dt.floor('h')
+
+    # Лічильник повідомлень (unique msg_id per city per hour)
+    df_exploded['tg_msg_count'] = 1
 
     # CRITICAL: SUM AGGREGATION (FROM NOTEBOOK, NOT BINARY MAX)
     agg_dict = {threat: 'sum' for threat in list(THREAT_DICT.keys())}
+    agg_dict['tg_msg_count'] = 'sum'
     hourly = df_exploded.groupby(['datetime', 'city']).agg(agg_dict).reset_index()
 
-    # Rename columns to add "_count" suffix
+    # Rename threat columns to add "_count" suffix (tg_msg_count already has correct name)
     rename_dict = {threat: f'{threat}_count' for threat in THREAT_DICT.keys()}
     hourly = hourly.rename(columns=rename_dict)
 
@@ -250,8 +257,8 @@ def collect_raw_data():
     log.info("STAGE 1: COLLECTING RAW TELEGRAM DATA")
     log.info("=" * 60)
 
-    # Use naive UTC across pipeline to avoid tz mismatch with Telethon datetimes
-    now_utc = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    # Use tz-aware UTC — стандарт пайплайну
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
     # Get stopwords
     stopwords = get_ukrainian_stopwords()
@@ -273,8 +280,8 @@ def collect_raw_data():
     # Load existing raw history
     if RAW_FILE.exists():
         df_hist = pd.read_csv(RAW_FILE)
-        # Parse datetimes and ensure hour alignment as naive UTC
-        df_hist['datetime'] = pd.to_datetime(df_hist['datetime']).dt.floor('h')
+        # utc=True коректно обробляє і "+00:00" рядки, і naive
+        df_hist['datetime'] = pd.to_datetime(df_hist['datetime'], utc=True).dt.floor('h')
     else:
         df_hist = pd.DataFrame()
 
@@ -289,15 +296,16 @@ def collect_raw_data():
 
     # Keep only last 48 hours
     cutoff = now_utc - timedelta(hours=RAW_HISTORY_HOURS)
-    # Ensure datetime column is parsed and floored to hour (naive UTC)
-    df_combined['datetime'] = pd.to_datetime(df_combined['datetime']).dt.floor('h')
+    # utc=True коректно обробляє і "+00:00" рядки, і naive
+    df_combined['datetime'] = pd.to_datetime(df_combined['datetime'], utc=True).dt.floor('h')
     df_combined = df_combined[df_combined['datetime'] >= cutoff]
 
-    # Fill missing hours with zeros for all cities
+    # Fill missing hours with zeros for all cities (tz-aware range)
     all_hours = pd.date_range(
         start=df_combined['datetime'].min(),
         end=now_utc,
-        freq='h'
+        freq='h',
+        tz='UTC'
     )
 
     grid = pd.MultiIndex.from_product(
@@ -347,19 +355,20 @@ def generate_features():
 
     # Load raw historical data
     df_raw = pd.read_csv(RAW_FILE)
-    # Parse datetimes as naive UTC and floor to hours for consistent comparisons
-    df_raw['datetime'] = pd.to_datetime(df_raw['datetime']).dt.floor('h')
+    # utc=True коректно обробляє і "+00:00" рядки, і naive
+    df_raw['datetime'] = pd.to_datetime(df_raw['datetime'], utc=True).dt.floor('h')
 
-    now_utc = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
     log.info(f"Reference time (T=0): {now_utc}")
     log.info(f"Loaded {len(df_raw)} raw hourly records")
 
-    # Generate future hours grid (T+1 to T+24)
+    # Generate future hours grid (T+1 to T+24) — tz-aware UTC
     future_hours = pd.date_range(
         start=now_utc + timedelta(hours=1),
         periods=FORECAST_HOURS,
-        freq='h'
+        freq='h',
+        tz='UTC'
     )
 
     # For each future hour, calculate which lags should exist
@@ -382,7 +391,7 @@ def generate_features():
                 'region': city,
             }
 
-            for threat in FEATURE_THREATS:
+            for threat in LAG_THREATS:  # включає tg_all_clear для lag1h і lag3h
                 threat_col = f'{threat}_count'
 
                 # lag1h: exists only for T+1
@@ -401,13 +410,42 @@ def generate_features():
                 else:
                     row_data[f'{threat}_count_lag3h'] = float('nan')
 
-                # lag6h: exists for T+1 to T+6
+                # lag6h: існує тільки для threat-типів (не для tg_all_clear)
+                if threat in FEATURE_THREATS:
+                    if hours_ahead <= 6:
+                        lag6_dt = now_utc - timedelta(hours=(6 - hours_ahead))
+                        lag6_val = city_hist[city_hist['datetime'] == lag6_dt][threat_col].values
+                        row_data[f'{threat}_count_lag6h'] = int(lag6_val[0]) if len(lag6_val) > 0 else 0
+                    else:
+                        row_data[f'{threat}_count_lag6h'] = float('nan')
+
+            # tg_msg_count lags (lag1h, lag3h, lag6h)
+            msg_col = 'tg_msg_count'
+            if msg_col in city_hist.columns:
+                if hours_ahead == 1:
+                    v = city_hist[city_hist['datetime'] == now_utc][msg_col].values
+                    row_data['tg_msg_count_lag1h'] = int(v[0]) if len(v) > 0 else 0
+                else:
+                    row_data['tg_msg_count_lag1h'] = float('nan')
+
+                if hours_ahead <= 3:
+                    lag3_dt = now_utc - timedelta(hours=(3 - hours_ahead))
+                    v = city_hist[city_hist['datetime'] == lag3_dt][msg_col].values
+                    row_data['tg_msg_count_lag3h'] = int(v[0]) if len(v) > 0 else 0
+                else:
+                    row_data['tg_msg_count_lag3h'] = float('nan')
+
                 if hours_ahead <= 6:
                     lag6_dt = now_utc - timedelta(hours=(6 - hours_ahead))
-                    lag6_val = city_hist[city_hist['datetime'] == lag6_dt][threat_col].values
-                    row_data[f'{threat}_count_lag6h'] = int(lag6_val[0]) if len(lag6_val) > 0 else 0
+                    v = city_hist[city_hist['datetime'] == lag6_dt][msg_col].values
+                    row_data['tg_msg_count_lag6h'] = int(v[0]) if len(v) > 0 else 0
                 else:
-                    row_data[f'{threat}_count_lag6h'] = float('nan')
+                    row_data['tg_msg_count_lag6h'] = float('nan')
+            else:
+                # Якщо колонка відсутня в raw — NaN (HistGBM впорається)
+                row_data['tg_msg_count_lag1h'] = float('nan')
+                row_data['tg_msg_count_lag3h'] = float('nan')
+                row_data['tg_msg_count_lag6h'] = float('nan')
 
             all_rows.append(row_data)
 
