@@ -14,10 +14,10 @@ log = logging.getLogger("merge_pipeline")
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-FILE_ALARMS = BASE_DIR / "data" / "alarms" / "alarms_features_24h.csv"
+FILE_ALARMS = BASE_DIR / "data" / "alarms" / "alarms_features_hourly.csv"
 FILE_ISW = BASE_DIR / "data" / "isw" / "isw_forecast_features.csv"
 FILE_TELEGRAM = BASE_DIR / "data" / "telegram" / "telegram_features_24h.csv"
-FILE_WEATHER = BASE_DIR / "data" / "weather" / "weather_features_24h.csv"
+FILE_WEATHER = BASE_DIR / "data" / "weather" / "weather_features_hourly.csv"
 
 OUTPUT_DIR = BASE_DIR / "data" / "final"
 OUTPUT_FILE = OUTPUT_DIR / "FINAL_FEATURES_24H.csv"
