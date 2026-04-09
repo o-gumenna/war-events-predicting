@@ -140,7 +140,7 @@ def main():
     hist_path = Path(HISTORY_FILE)
     if hist_path.exists():
         df_hist = pd.read_csv(hist_path)
-        df_hist["datetime"] = pd.to_datetime(df_hist["datetime"], utc=True)
+        df_hist["datetime"] = pd.to_datetime(df_hist["datetime"], format='mixed', utc=True)
         print(f"Loaded local history: {len(df_hist)} rows.")
     else:
         df_hist = pd.DataFrame()
