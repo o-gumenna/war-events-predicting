@@ -1,13 +1,24 @@
+#!/usr/bin/env python3
 """
-telegram_fetch_binary.py
-───────────────────────────────────────────────────────────────────────────────
-FULL VERSION:
-- 48h rolling raw data
-- timezone-aware (UTC safe)
-- binary features (0/1 instead of counts)
-- dynamic lag logic (T+1 … T+24)
-- edge-case safe
-───────────────────────────────────────────────────────────────────────────────
+telegram_fetch.py
+────────────────────────────────────────────────────────────────────────────────
+Script for collecting raw Telegram data and generating features for model input.
+
+LOGIC MATCHES TELEGRAM_ANALYSIS NOTEBOOK:
+- Text cleaning with Ukrainian stopwords (exact match)
+- Threat patterns from notebook (comprehensive dictionaries)
+- City patterns with oblast variants (full coverage)
+- SUM aggregation (counts, not binary)
+- Lag logic: lag1 for T+1, lag3 for T+1..T+3, lag6 for T+1..T+6
+
+TWO-STAGE PIPELINE:
+  Stage 1 (collect_raw_data): Collects RAW hourly aggregates (48h history)
+  Stage 2 (generate_features): Processes raw data to create lag features for T+1...T+24
+
+Execution:
+  - collect_raw_data() → runs every 5 minutes
+  - generate_features() → runs hourly
+────────────────────────────────────────────────────────────────────────────────
 """
 
 import os
@@ -19,18 +30,17 @@ import pandas as pd
 import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from dotenv import load_dotenv, find_dotenv
+from dotenv import load_dotenv
 from telethon.sync import TelegramClient
 
+load_dotenv()
 
-load_dotenv(find_dotenv())
-
-# ── CONFIG ────────────────────────────────────────────────────────────────────
+# ── Configuration ─────────────────────────────────────────────────────────────
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
 
-CHANNEL_USERNAME = 'kpszsu'
+CHANNEL_USERNAME = 'air_alert_ua'
 
 RAW_FILE = Path("data/telegram/telegram_raw_48h.csv")
 FEATURES_FILE = Path("data/telegram/telegram_features_24h.csv")
@@ -39,12 +49,16 @@ RAW_HISTORY_HOURS = 48
 FORECAST_HOURS = 24
 SCRAPE_LOOKBACK_HOURS = 12
 
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("tg_pipeline")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-7s  %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("telegram_fetch")
 
-# ── DICTS ─────────────────────────────────────────────────────────────────────
+# ── City Patterns (EXACT FROM NOTEBOOK) ───────────────────────────────────────
 
-CITY_PATTERNS = {
+CITY_PATTERNS_FULL = {
     'Cherkasy': r'\b(?:черкас|черкащин)\w*',
     'Chernihiv': r'\b(?:чернігів|чернігов|чернігівщин)\w*',
     'Chernivtsi': r'\b(?:чернівц|буковин|чернівеччин)\w*',
@@ -56,6 +70,7 @@ CITY_PATTERNS = {
     'Khmelnytskyi': r'\b(?:хмельницьк|старокостянтинів|шепетівк|хмельниччин)\w*',
     'Kropyvnytskyi': r'\b(?:кропивницьк|кіровоград|олександрі|кіровоградщин)\w*',
     'Kyiv': r'\b(?:київ|києва|васильків|білоцерків|київщин|броварах|біла церква|бровари)\w*',
+    'Luhansk': r'\b(?:луганськ|луганщин)\w*',
     'Lutsk': r'\b(?:луцьк|ковель|волин|волинщин|волинськ)\w*',
     'Lviv': r'\b(?:львів|стрий|дрогобич|львівщин)\w*',
     'Mykolaiv': r'\b(?:миколаїв|очаків|вознесенськ|миколаївщин)\w*',
@@ -70,22 +85,76 @@ CITY_PATTERNS = {
     'Zhytomyr': r'\b(?:житомир|бердичів|коростен|житомирщин)\w*',
 }
 
+ALL_CITIES = sorted(CITY_PATTERNS_FULL.keys())
 
-ALL_CITIES = sorted(CITY_PATTERNS.keys())
+# ── Threat Patterns (EXACT FROM NOTEBOOK) ─────────────────────────────────────
 
-
-THREAT_PATTERNS = {
-    'shaheds': r'\b(?:шахед|дрон|бпла|герань|мопед|безпілотник|камікадзе|shahed)\w*',
-    'ballistic': r'\b(?:баліст|іскандер|с-300|с-400|оперативно-тактичн|швидкісн)\w*',
-    'mig31': r'\b(?:міг-31|кинджал|саваслейка|моздок|аеробалістич)\w*',
-    'cruise': r'\b(?:крилат|ракет|калібр|ту-95|ту-22|х-101|х-555|х-59|х-22|х-47)\w*',
-    'all_clear': r'\b(?:відбій)\w*',
+THREAT_DICT = {
+    'tg_shaheds': ['шахед', 'герань', 'мопед', 'бпла', 'безпілотник', 'дрон', 'камікадзе'],
+    'tg_ballistic': ['балістик', 'балістичн', 'іскандер', 'с-300', 'с-400', 'оперативно-тактичн'],
+    'tg_mig31': ['міг-31', 'кинджал', 'саваслейка', 'моздок', 'аеробалістич'],
+    'tg_cruise': ['крилат', 'калібр', 'х-101', 'х-555', 'ту-95', 'ту-22', 'ракет'],
+    'tg_all_clear': ['відбій'],
 }
 
-FEATURE_THREATS = ['shaheds', 'ballistic', 'mig31', 'cruise']
+# Only feature threats (exclude all_clear)
+FEATURE_THREATS = ['tg_shaheds', 'tg_ballistic', 'tg_mig31', 'tg_cruise']
+
+
+# ── Text Processing (EXACT FROM NOTEBOOK) ─────────────────────────────────────
+
+def get_ukrainian_stopwords():
+    """Fetch Ukrainian stopwords from GitHub (EXACT FROM NOTEBOOK)."""
+    try:
+        url = 'https://raw.githubusercontent.com/skopytr/ukrainian-stopwords/master/ukrainian_stopwords.txt'
+        response = requests.get(url, timeout=10)
+        stopwords_ua = set(response.text.split('\n'))
+
+        # Custom stopwords (EXACT FROM NOTEBOOK)
+        custom_stopwords = {'підписатись', 'джерело', 'надіслати', 'канал', 'реклама', 'відео', 'фото'}
+        stopwords_ua.update(custom_stopwords)
+
+        return stopwords_ua
+    except Exception as e:
+        log.warning(f"Could not fetch stopwords: {e}. Using minimal set.")
+        return {'і', 'в', 'на', 'з', 'у', 'по', 'до', 'від', 'та', 'що', 'як'}
+
+
+def clean_text(text, stopwords):
+    """Clean text (EXACT FROM NOTEBOOK)."""
+    if not isinstance(text, str) or text.strip() == '':
+        return ''
+    text = text.lower()
+    text = re.sub(r'http\S+|www\S+|@\w+', '', text)
+    # Keep Ukrainian and English letters, spaces, and hyphens
+    text = re.sub(r'[^а-яіїєґa-z\s-]', ' ', text)
+    words = text.split()
+    # Filter out stopwords and single-character tokens
+    words = [w for w in words if w not in stopwords and len(w) > 1]
+    return ' '.join(words)
+
+
+def extract_cities(text_clean):
+    """Extract cities from cleaned text (EXACT FROM NOTEBOOK)."""
+    if not text_clean:
+        return ALL_CITIES  # Nationwide message
+
+    found = [
+        city for city, pattern in CITY_PATTERNS_FULL.items()
+        if re.search(pattern, text_clean, re.IGNORECASE)
+    ]
+    return found if found else ALL_CITIES
+
+
+def count_threat(text, keywords):
+    """Return 1 if at least one keyword is found, otherwise 0 (EXACT FROM NOTEBOOK)."""
+    if not isinstance(text, str) or text.strip() == '':
+        return 0
+    return int(any(kw in text for kw in keywords))
 
 
 def convert_to_utc(dt_naive):
+    """Convert naive Kyiv datetime to UTC."""
     kyiv_tz = pytz.timezone('Europe/Kyiv')
     try:
         dt_localized = kyiv_tz.localize(dt_naive, is_dst=None)
@@ -93,203 +162,322 @@ def convert_to_utc(dt_naive):
         dt_localized = kyiv_tz.localize(dt_naive, is_dst=False)
     return dt_localized.astimezone(pytz.UTC).replace(tzinfo=None)
 
-# ── TEXT ──────────────────────────────────────────────────────────────────────
 
-def clean_text(text):
-    if not isinstance(text, str) or not text.strip():
-        return ''
-    text = text.lower()
-    text = re.sub(r'http\S+|www\S+|@\w+', '', text)
-    text = re.sub(r'[^а-яіїєґa-z0-9\s]', ' ', text)
-    return text
+# ── Telegram Scraping ─────────────────────────────────────────────────────────
 
-def extract_cities(text):
-    if not text:
-        return ALL_CITIES
-    found = [c for c, p in CITY_PATTERNS.items() if re.search(p, text)]
-    return found if found else ALL_CITIES
+async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
+    """Scrape Telegram messages from the last N hours."""
+    if not API_ID or not API_HASH:
+        log.error("TG_API_ID or TG_API_HASH not configured!")
+        return []
 
-# ── SCRAPE ────────────────────────────────────────────────────────────────────
+    log.info(f"Connecting to Telegram to scrape last {lookback_hours}h...")
 
-async def scrape():
     now_utc = datetime.now(timezone.utc)
-    limit = now_utc - timedelta(hours=SCRAPE_LOOKBACK_HOURS)
+    start_time_limit = now_utc - timedelta(hours=lookback_hours)
+    limit_dt = start_time_limit.replace(tzinfo=timezone.utc)
 
-    messages = []
+    messages_data = []
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     session_path = os.path.join(script_dir, 'alarm_session')
 
-    async with TelegramClient(session_path, API_ID, API_HASH) as client:
-        async for msg in client.iter_messages(CHANNEL_USERNAME):
-            if msg.date < limit:
-                break
-            if not msg.text:
-                continue
+    try:
+        async with TelegramClient(session_path, API_ID, API_HASH) as client:
+            async for message in client.iter_messages(
+                CHANNEL_USERNAME,
+                offset_date=now_utc.replace(tzinfo=timezone.utc)
+            ):
+                if message.date < limit_dt:
+                    break
+                if not message.text:
+                    continue
 
-            date_utc = convert_to_utc(msg.date.replace(tzinfo=None))
-            text_clean = clean_text(msg.text)
+                date_kyiv = message.date.replace(tzinfo=None)
+                date_utc = convert_to_utc(date_kyiv)
 
-            if not text_clean:
-                continue
+                text_clean = clean_text(message.text, stopwords)
+                if not text_clean:
+                    continue
 
-            messages.append({
-                'datetime': date_utc,
-                'text': text_clean
-            })
+                messages_data.append({
+                    'datetime': date_utc,
+                    'msg_id': message.id,
+                    'text_clean': text_clean,
+                })
 
-    return messages
+        log.info(f"Scraped {len(messages_data)} messages")
+        return messages_data
 
-# ── STAGE 1 ───────────────────────────────────────────────────────────────────
+    except Exception as e:
+        log.error(f"Telegram scraping error: {e}")
+        return []
 
-def collect_raw_data():
-    log.info("Collecting RAW data...")
 
-    messages = asyncio.run(scrape())
+# ══════════════════════════════════════════════════════════════════════════════
+# STAGE 1: Collect and Save RAW Data (runs every 5 min)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def process_messages_to_hourly(messages: list[dict]) -> pd.DataFrame:
+    """
+    Process raw messages into hourly aggregates per city.
+    Uses SUM aggregation (EXACT FROM NOTEBOOK).
+    """
     if not messages:
-        log.warning("No messages scraped")
-        return
+        return pd.DataFrame()
 
     df = pd.DataFrame(messages)
 
-    df['city'] = df['text'].apply(extract_cities)
-    df = df.explode('city')
+    # Extract cities from each message
+    df['cities'] = df['text_clean'].apply(extract_cities)
+    df_exploded = df.explode('cities').rename(columns={'cities': 'city'})
 
-    # Binary detection
-    for name, pattern in THREAT_PATTERNS.items():
-        df[name] = df['text'].str.contains(pattern, flags=re.IGNORECASE).astype(int)
+    # Apply threat detection for each type
+    for threat_name, keywords in THREAT_DICT.items():
+        df_exploded[threat_name] = df_exploded['text_clean'].apply(
+            lambda t: count_threat(t, keywords)
+        )
 
-    # All clear logic
-    clear_mask = df['all_clear'] == 1
-    df.loc[clear_mask, FEATURE_THREATS] = 0
+    # Handle "all clear" - it negates other threats
+    clear_mask = df_exploded['tg_all_clear'] == 1
+    df_exploded.loc[clear_mask, FEATURE_THREATS] = 0
 
     # Round to hour
-    df['datetime'] = pd.to_datetime(df['datetime']).dt.floor('h')
+    df_exploded['datetime'] = pd.to_datetime(df_exploded['datetime']).dt.floor('h')
 
-    # IMPORTANT: BINARY AGGREGATION (NOT SUM)
-    agg = df.groupby(['datetime', 'city'])[list(THREAT_PATTERNS.keys())].max().reset_index()
+    # CRITICAL: SUM AGGREGATION (FROM NOTEBOOK, NOT BINARY MAX)
+    agg_dict = {threat: 'sum' for threat in list(THREAT_DICT.keys())}
+    hourly = df_exploded.groupby(['datetime', 'city']).agg(agg_dict).reset_index()
 
-    # Load old data
+    # Rename columns to add "_count" suffix
+    rename_dict = {threat: f'{threat}_count' for threat in THREAT_DICT.keys()}
+    hourly = hourly.rename(columns=rename_dict)
+
+    return hourly
+
+
+def collect_raw_data():
+    """
+    STAGE 1: Scrape Telegram, aggregate to hourly, update rolling 48h history.
+    This runs frequently (e.g., every 5 minutes).
+    """
+    log.info("=" * 60)
+    log.info("STAGE 1: COLLECTING RAW TELEGRAM DATA")
+    log.info("=" * 60)
+
+    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    # Get stopwords
+    stopwords = get_ukrainian_stopwords()
+
+    # Scrape recent messages
+    messages = asyncio.run(scrape_messages(SCRAPE_LOOKBACK_HOURS, stopwords))
+
+    if not messages:
+        log.warning("No messages scraped. Skipping update.")
+        return
+
+    # Process to hourly aggregates
+    new_data = process_messages_to_hourly(messages)
+
+    if new_data.empty:
+        log.warning("No hourly data generated. Skipping update.")
+        return
+
+    # Load existing raw history
     if RAW_FILE.exists():
-        old = pd.read_csv(RAW_FILE)
-        old['datetime'] = pd.to_datetime(old['datetime'], utc=True).dt.tz_localize(None)
-        agg = pd.concat([old, agg], ignore_index=True)
+        df_hist = pd.read_csv(RAW_FILE)
+        df_hist['datetime'] = pd.to_datetime(df_hist['datetime'], utc=True).dt.tz_localize(None)
+    else:
+        df_hist = pd.DataFrame()
 
-    # Remove duplicates
-    agg = agg.drop_duplicates(['datetime', 'city'], keep='last')
+    # Merge new data with history
+    if not df_hist.empty:
+        df_combined = pd.concat([df_hist, new_data], ignore_index=True)
+    else:
+        df_combined = new_data.copy()
 
-    # Keep 48h
-    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    # Remove duplicates (keep latest)
+    df_combined = df_combined.drop_duplicates(subset=['datetime', 'city'], keep='last')
+
+    # Keep only last 48 hours
     cutoff = now_utc - timedelta(hours=RAW_HISTORY_HOURS)
+    df_combined['datetime'] = pd.to_datetime(df_combined['datetime']).dt.tz_localize(None)
+    df_combined = df_combined[df_combined['datetime'] >= cutoff]
 
-    agg['datetime'] = pd.to_datetime(agg['datetime']).dt.tz_localize(None)
-    agg = agg[agg['datetime'] >= cutoff]
-
-    # Fill grid
-    hours = pd.date_range(
-        start=agg['datetime'].min(),
+    # Fill missing hours with zeros for all cities
+    all_hours = pd.date_range(
+        start=df_combined['datetime'].min(),
         end=now_utc,
         freq='h'
     )
 
-    grid = pd.MultiIndex.from_product([hours, ALL_CITIES], names=['datetime', 'city'])
-    full = pd.DataFrame(index=grid).reset_index()
+    grid = pd.MultiIndex.from_product(
+        [all_hours, ALL_CITIES],
+        names=['datetime', 'city']
+    )
 
-    full = full.merge(agg, on=['datetime', 'city'], how='left')
+    df_full = pd.DataFrame(index=grid).reset_index()
+    df_full = df_full.merge(df_combined, on=['datetime', 'city'], how='left')
 
-    for col in THREAT_PATTERNS.keys():
-        full[col] = full[col].fillna(0).astype(int)
+    # Fill NaN with 0 for threat counts
+    count_cols = [f'{threat}_count' for threat in THREAT_DICT.keys()]
+    for col in count_cols:
+        if col in df_full.columns:
+            df_full[col] = df_full[col].fillna(0).astype(int)
 
-    full = full.sort_values(['city', 'datetime']).reset_index(drop=True)
+    df_full = df_full.sort_values(['city', 'datetime']).reset_index(drop=True)
 
+    # Save raw data
     RAW_FILE.parent.mkdir(parents=True, exist_ok=True)
-    full.to_csv(RAW_FILE, index=False)
+    df_full.to_csv(RAW_FILE, index=False)
 
-    log.info(f"Saved RAW: {RAW_FILE}")
+    log.info(f"Saved raw data: {RAW_FILE}")
+    log.info(f"Total rows: {len(df_full)}")
+    log.info(f"Time range: {df_full['datetime'].min()} → {df_full['datetime'].max()}")
+    log.info("=" * 60)
 
-# ── STAGE 2 ───────────────────────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════════
+# STAGE 2: Generate Features with Lags (runs hourly)
+# ══════════════════════════════════════════════════════════════════════════════
 
 def generate_features():
-    log.info("Generating FEATURES...")
+    """
+    STAGE 2: Process raw 48h data to generate lag features for next 24h.
+
+    LAG LOGIC (UNCHANGED FROM ORIGINAL):
+    - For hour T+N (N hours into the future):
+      - lag1h = value from T-1 (exists only for T+1)
+      - lag3h = value from T-3 (exists for T+1...T+3)
+      - lag6h = value from T-6 (exists for T+1...T+6)
+      - If lag doesn't exist for that future hour → NaN
+    """
+    log.info("=" * 60)
+    log.info("STAGE 2: GENERATING FEATURES FOR MODEL INPUT")
+    log.info("=" * 60)
 
     if not RAW_FILE.exists():
-        log.error("RAW file missing")
+        log.error(f"Raw data file not found: {RAW_FILE}")
+        log.error("Run collect_raw_data() first!")
         return
 
-    df = pd.read_csv(RAW_FILE)
-    df['datetime'] = pd.to_datetime(df['datetime'], utc=True)
+    # Load raw historical data
+    df_raw = pd.read_csv(RAW_FILE)
+    df_raw['datetime'] = pd.to_datetime(df_raw['datetime'], utc=True).dt.tz_localize(None)
 
     now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
 
-    df = df.sort_values(['city', 'datetime'])
+    log.info(f"Reference time (T=0): {now_utc}")
+    log.info(f"Loaded {len(df_raw)} raw hourly records")
 
-    # Create lags (binary stays binary)
-    for t in FEATURE_THREATS:
-        df[f'{t}_lag1'] = df.groupby('city')[t].shift(1)
-        df[f'{t}_lag3'] = df.groupby('city')[t].shift(3)
-        df[f'{t}_lag6'] = df.groupby('city')[t].shift(6)
-
+    # Generate future hours grid (T+1 to T+24)
     future_hours = pd.date_range(
         start=now_utc + timedelta(hours=1),
         periods=FORECAST_HOURS,
         freq='h'
     )
 
-    rows = []
+    # For each future hour, calculate which lags should exist
+    all_rows = []
 
     for city in ALL_CITIES:
-        city_hist = df[df['city'] == city]
+        city_hist = df_raw[df_raw['city'] == city].copy()
 
         if city_hist.empty:
+            log.warning(f"No historical data for {city}")
             continue
 
-        for i, future_dt in enumerate(future_hours, start=1):
+        city_hist = city_hist.sort_values('datetime').reset_index(drop=True)
 
-            row = {
+        for idx, future_dt in enumerate(future_hours, start=1):
+            hours_ahead = idx
+
+            row_data = {
                 'datetime': future_dt,
-                'region': city
+                'region': city,
             }
 
-            for t in FEATURE_THREATS:
+            for threat in FEATURE_THREATS:
+                threat_col = f'{threat}_count'
 
-                # lag1
-                if i == 1:
-                    val = city_hist.loc[city_hist['datetime'] == now_utc, t].values
-                    row[f'tg_{t}_count_lag1h'] = int(val[0]) if len(val) else 0
+                # lag1h: exists only for T+1
+                if hours_ahead == 1:
+                    lag1_dt = now_utc
+                    lag1_val = city_hist[city_hist['datetime'] == lag1_dt][threat_col].values
+                    row_data[f'{threat}_count_lag1h'] = int(lag1_val[0]) if len(lag1_val) > 0 else 0
                 else:
-                    row[f'tg_{t}_count_lag1h'] = float('nan')
+                    row_data[f'{threat}_count_lag1h'] = float('nan')
 
-                # lag3
-                if i <= 3:
-                    lag_dt = now_utc - timedelta(hours=(3 - i))
-                    val = city_hist.loc[city_hist['datetime'] == lag_dt, t].values
-                    row[f'tg_{t}_count_lag3h'] = int(val[0]) if len(val) else 0
+                # lag3h: exists for T+1 to T+3
+                if hours_ahead <= 3:
+                    lag3_dt = now_utc - timedelta(hours=(3 - hours_ahead))
+                    lag3_val = city_hist[city_hist['datetime'] == lag3_dt][threat_col].values
+                    row_data[f'{threat}_count_lag3h'] = int(lag3_val[0]) if len(lag3_val) > 0 else 0
                 else:
-                    row[f'tg_{t}_count_lag3h'] = float('nan')
+                    row_data[f'{threat}_count_lag3h'] = float('nan')
 
-                # lag6
-                if i <= 6:
-                    lag_dt = now_utc - timedelta(hours=(6 - i))
-                    val = city_hist.loc[city_hist['datetime'] == lag_dt, t].values
-                    row[f'tg_{t}_count_lag6h'] = int(val[0]) if len(val) else 0
+                # lag6h: exists for T+1 to T+6
+                if hours_ahead <= 6:
+                    lag6_dt = now_utc - timedelta(hours=(6 - hours_ahead))
+                    lag6_val = city_hist[city_hist['datetime'] == lag6_dt][threat_col].values
+                    row_data[f'{threat}_count_lag6h'] = int(lag6_val[0]) if len(lag6_val) > 0 else 0
                 else:
-                    row[f'tg_{t}_count_lag6h'] = float('nan')
+                    row_data[f'{threat}_count_lag6h'] = float('nan')
 
-            rows.append(row)
+            all_rows.append(row_data)
 
-    df_out = pd.DataFrame(rows)
-    df_out = df_out.sort_values(['region', 'datetime']).reset_index(drop=True)
+    df_output = pd.DataFrame(all_rows)
+    df_output = df_output.sort_values(['region', 'datetime']).reset_index(drop=True)
 
     FEATURES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    df_out.to_csv(FEATURES_FILE, index=False)
+    df_output.to_csv(FEATURES_FILE, index=False)
 
-    log.info(f"Saved FEATURES: {FEATURES_FILE}")
-    log.info(f"Shape: {df_out.shape}")
+    log.info(f"Saved features: {FEATURES_FILE}")
+    log.info(f"Shape: {df_output.shape}")
+    log.info(f"Regions: {len(df_output['region'].unique())}")
+    log.info(f"Hours: {df_output['datetime'].min()} → {df_output['datetime'].max()}")
 
-# ── MAIN ──────────────────────────────────────────────────────────────────────
+    # Show lag coverage statistics
+    lag_cols = [col for col in df_output.columns if 'lag' in col]
+    for col in lag_cols[:3]:  # Show first 3 as example
+        non_nan = df_output[col].notna().sum()
+        total = len(df_output)
+        log.info(f"{col}: {non_nan}/{total} non-NaN values ({100*non_nan/total:.1f}%)")
+
+    log.info("=" * 60)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Main Entry Point
+# ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    collect_raw_data()
-    generate_features()
+    """
+    Main execution function.
+
+    For cron setup:
+    - Run collect_raw_data() every 5 minutes:   */5 * * * *
+    - Run generate_features() every hour:       0 * * * *
+
+    Or run both sequentially for testing.
+    """
+    import sys
+
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "collect":
+            collect_raw_data()
+        elif sys.argv[1] == "generate":
+            generate_features()
+        else:
+            log.error(f"Unknown command: {sys.argv[1]}")
+            log.info("Usage: python telegram_fetch.py [collect|generate]")
+    else:
+        # Run both stages sequentially (for testing)
+        log.info("Running both stages sequentially...")
+        collect_raw_data()
+        generate_features()
+
 
 if __name__ == "__main__":
     main()
