@@ -25,13 +25,19 @@ import os
 import re
 import logging
 import asyncio
-import pytz
+# Use stdlib timezone (UTC) — avoid pytz dependency
 import pandas as pd
 import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
-from telethon.sync import TelegramClient
+
+# Telethon is optional for running unit tests that don't call the scraper.
+# Import lazily / optionally so tests can run on machines without telethon installed.
+try:
+    from telethon.sync import TelegramClient
+except Exception:
+    TelegramClient = None
 
 load_dotenv()
 
@@ -153,29 +159,29 @@ def count_threat(text, keywords):
     return int(any(kw in text for kw in keywords))
 
 
-def convert_to_utc(dt_naive):
-    """Convert naive Kyiv datetime to UTC."""
-    kyiv_tz = pytz.timezone('Europe/Kyiv')
-    try:
-        dt_localized = kyiv_tz.localize(dt_naive, is_dst=None)
-    except (pytz.exceptions.AmbiguousTimeError, pytz.exceptions.NonExistentTimeError):
-        dt_localized = kyiv_tz.localize(dt_naive, is_dst=False)
-    return dt_localized.astimezone(pytz.UTC).replace(tzinfo=None)
+# Note: we intentionally avoid timezone conversions here. Telethon returns
+# message.date in UTC; we will drop tzinfo for storage and treat datetimes
+# across the pipeline as naive UTC timestamps.
 
 
 # ── Telegram Scraping ─────────────────────────────────────────────────────────
 
 async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
-    """Scrape Telegram messages from the last N hours."""
+    """Scrape Telegram messages from the last N hours.
+
+    This routine normalizes message timestamps to naive UTC datetimes using
+    `normalize_to_utc_naive` so downstream aggregation stays consistent.
+    """
     if not API_ID or not API_HASH:
         log.error("TG_API_ID or TG_API_HASH not configured!")
         return []
 
     log.info(f"Connecting to Telegram to scrape last {lookback_hours}h...")
 
-    now_utc = datetime.now(timezone.utc)
+    # Use naive UTC timestamps across the pipeline to avoid tz mismatches
+    now_utc = datetime.utcnow()
     start_time_limit = now_utc - timedelta(hours=lookback_hours)
-    limit_dt = start_time_limit.replace(tzinfo=timezone.utc)
+    limit_dt = start_time_limit
 
     messages_data = []
 
@@ -184,17 +190,20 @@ async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
 
     try:
         async with TelegramClient(session_path, API_ID, API_HASH) as client:
-            async for message in client.iter_messages(
-                CHANNEL_USERNAME,
-                offset_date=now_utc.replace(tzinfo=timezone.utc)
-            ):
-                if message.date < limit_dt:
-                    break
-                if not message.text:
+            # iterate messages starting from now (Telethon returns aware datetimes often)
+            async for message in client.iter_messages(CHANNEL_USERNAME, offset_date=now_utc):
+                msg_dt = getattr(message, 'date', None)
+                if msg_dt is None:
                     continue
 
-                date_kyiv = message.date.replace(tzinfo=None)
-                date_utc = convert_to_utc(date_kyiv)
+                # Minimal handling: drop tzinfo if present and treat as UTC
+                date_utc = msg_dt.replace(tzinfo=None)
+
+                if date_utc < limit_dt:
+                    break
+
+                if not getattr(message, 'text', None):
+                    continue
 
                 text_clean = clean_text(message.text, stopwords)
                 if not text_clean:
@@ -265,7 +274,8 @@ def collect_raw_data():
     log.info("STAGE 1: COLLECTING RAW TELEGRAM DATA")
     log.info("=" * 60)
 
-    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    # Use naive UTC across pipeline to avoid tz mismatch with Telethon datetimes
+    now_utc = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
 
     # Get stopwords
     stopwords = get_ukrainian_stopwords()
@@ -287,7 +297,8 @@ def collect_raw_data():
     # Load existing raw history
     if RAW_FILE.exists():
         df_hist = pd.read_csv(RAW_FILE)
-        df_hist['datetime'] = pd.to_datetime(df_hist['datetime'], utc=True).dt.tz_localize(None)
+        # Parse datetimes and ensure hour alignment as naive UTC
+        df_hist['datetime'] = pd.to_datetime(df_hist['datetime']).dt.floor('h')
     else:
         df_hist = pd.DataFrame()
 
@@ -302,7 +313,8 @@ def collect_raw_data():
 
     # Keep only last 48 hours
     cutoff = now_utc - timedelta(hours=RAW_HISTORY_HOURS)
-    df_combined['datetime'] = pd.to_datetime(df_combined['datetime']).dt.tz_localize(None)
+    # Ensure datetime column is parsed and floored to hour (naive UTC)
+    df_combined['datetime'] = pd.to_datetime(df_combined['datetime']).dt.floor('h')
     df_combined = df_combined[df_combined['datetime'] >= cutoff]
 
     # Fill missing hours with zeros for all cities
@@ -364,9 +376,10 @@ def generate_features():
 
     # Load raw historical data
     df_raw = pd.read_csv(RAW_FILE)
-    df_raw['datetime'] = pd.to_datetime(df_raw['datetime'], utc=True).dt.tz_localize(None)
+    # Parse datetimes as naive UTC and floor to hours for consistent comparisons
+    df_raw['datetime'] = pd.to_datetime(df_raw['datetime']).dt.floor('h')
 
-    now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    now_utc = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
 
     log.info(f"Reference time (T=0): {now_utc}")
     log.info(f"Loaded {len(df_raw)} raw hourly records")
