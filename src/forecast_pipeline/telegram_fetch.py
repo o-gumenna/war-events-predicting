@@ -1,39 +1,21 @@
 #!/usr/bin/env python3
-"""
-telegram_fetch.py
-────────────────────────────────────────────────────────────────────────────────
-Script for collecting raw Telegram data and generating features for model input.
+"""Telegram fetching and feature generation (UTC timestamps).
 
-LOGIC MATCHES TELEGRAM_ANALYSIS NOTEBOOK:
-- Text cleaning with Ukrainian stopwords (exact match)
-- Threat patterns from notebook (comprehensive dictionaries)
-- City patterns with oblast variants (full coverage)
-- SUM aggregation (counts, not binary)
-- Lag logic: lag1 for T+1, lag3 for T+1..T+3, lag6 for T+1..T+6
-
-TWO-STAGE PIPELINE:
-  Stage 1 (collect_raw_data): Collects RAW hourly aggregates (48h history)
-  Stage 2 (generate_features): Processes raw data to create lag features for T+1...T+24
-
-Execution:
-  - collect_raw_data() → runs every 5 minutes
-  - generate_features() → runs hourly
-────────────────────────────────────────────────────────────────────────────────
+Collect raw Telegram messages, aggregate hourly per city, and generate
+lag features for forecasting.
 """
 
 import os
 import re
 import logging
 import asyncio
-# Use stdlib timezone (UTC) — avoid pytz dependency
 import pandas as pd
 import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Telethon is optional for running unit tests that don't call the scraper.
-# Import lazily / optionally so tests can run on machines without telethon installed.
+
 try:
     from telethon.sync import TelegramClient
 except Exception:
@@ -41,7 +23,7 @@ except Exception:
 
 load_dotenv()
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# Configuration
 
 API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
@@ -62,7 +44,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("telegram_fetch")
 
-# ── City Patterns (EXACT FROM NOTEBOOK) ───────────────────────────────────────
+# City patterns (regex)
 
 CITY_PATTERNS_FULL = {
     'Cherkasy': r'\b(?:черкас|черкащин)\w*',
@@ -76,7 +58,6 @@ CITY_PATTERNS_FULL = {
     'Khmelnytskyi': r'\b(?:хмельницьк|старокостянтинів|шепетівк|хмельниччин)\w*',
     'Kropyvnytskyi': r'\b(?:кропивницьк|кіровоград|олександрі|кіровоградщин)\w*',
     'Kyiv': r'\b(?:київ|києва|васильків|білоцерків|київщин|броварах|біла церква|бровари)\w*',
-    'Luhansk': r'\b(?:луганськ|луганщин)\w*',
     'Lutsk': r'\b(?:луцьк|ковель|волин|волинщин|волинськ)\w*',
     'Lviv': r'\b(?:львів|стрий|дрогобич|львівщин)\w*',
     'Mykolaiv': r'\b(?:миколаїв|очаків|вознесенськ|миколаївщин)\w*',
@@ -91,9 +72,15 @@ CITY_PATTERNS_FULL = {
     'Zhytomyr': r'\b(?:житомир|бердичів|коростен|житомирщин)\w*',
 }
 
-ALL_CITIES = sorted(CITY_PATTERNS_FULL.keys())
 
-# ── Threat Patterns (EXACT FROM NOTEBOOK) ─────────────────────────────────────
+ALL_CITIES = [
+    'Cherkasy', 'Chernihiv', 'Chernivtsi', 'Dnipro', 'Donetsk', 'Ivano-Frankivsk',
+    'Kharkiv', 'Kherson', 'Khmelnytskyi', 'Kropyvnytskyi', 'Kyiv', 'Lutsk',
+    'Lviv', 'Mykolaiv', 'Odesa', 'Poltava', 'Rivne', 'Sumy', 'Ternopil',
+    'Uzhhorod', 'Vinnytsia', 'Zaporizhzhia', 'Zhytomyr'
+]
+
+# Threat patterns
 
 THREAT_DICT = {
     'tg_shaheds': ['шахед', 'герань', 'мопед', 'бпла', 'безпілотник', 'дрон', 'камікадзе'],
@@ -107,10 +94,10 @@ THREAT_DICT = {
 FEATURE_THREATS = ['tg_shaheds', 'tg_ballistic', 'tg_mig31', 'tg_cruise']
 
 
-# ── Text Processing (EXACT FROM NOTEBOOK) ─────────────────────────────────────
+# Text processing
 
 def get_ukrainian_stopwords():
-    """Fetch Ukrainian stopwords from GitHub (EXACT FROM NOTEBOOK)."""
+    """Return a set of Ukrainian stopwords."""
     try:
         url = 'https://raw.githubusercontent.com/skopytr/ukrainian-stopwords/master/ukrainian_stopwords.txt'
         response = requests.get(url, timeout=10)
@@ -127,7 +114,7 @@ def get_ukrainian_stopwords():
 
 
 def clean_text(text, stopwords):
-    """Clean text (EXACT FROM NOTEBOOK)."""
+    """Simple text cleaning and stopword removal."""
     if not isinstance(text, str) or text.strip() == '':
         return ''
     text = text.lower()
@@ -141,7 +128,7 @@ def clean_text(text, stopwords):
 
 
 def extract_cities(text_clean):
-    """Extract cities from cleaned text (EXACT FROM NOTEBOOK)."""
+    """Return list of matched cities or all cities for nationwide messages."""
     if not text_clean:
         return ALL_CITIES  # Nationwide message
 
@@ -153,32 +140,26 @@ def extract_cities(text_clean):
 
 
 def count_threat(text, keywords):
-    """Return 1 if at least one keyword is found, otherwise 0 (EXACT FROM NOTEBOOK)."""
+    """Return 1 if any keyword appears in text, else 0."""
     if not isinstance(text, str) or text.strip() == '':
         return 0
     return int(any(kw in text for kw in keywords))
 
 
-# Note: we intentionally avoid timezone conversions here. Telethon returns
-# message.date in UTC; we will drop tzinfo for storage and treat datetimes
-# across the pipeline as naive UTC timestamps.
+# Timestamps are UTC; store as naive datetimes (drop tzinfo).
 
 
-# ── Telegram Scraping ─────────────────────────────────────────────────────────
+# Telegram scraping
 
 async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
-    """Scrape Telegram messages from the last N hours.
-
-    This routine normalizes message timestamps to naive UTC datetimes using
-    `normalize_to_utc_naive` so downstream aggregation stays consistent.
-    """
+    """Scrape Telegram messages from the last N hours."""
     if not API_ID or not API_HASH:
         log.error("TG_API_ID or TG_API_HASH not configured!")
         return []
 
     log.info(f"Connecting to Telegram to scrape last {lookback_hours}h...")
 
-    # Use naive UTC timestamps across the pipeline to avoid tz mismatches
+    # use naive UTC timestamps
     now_utc = datetime.utcnow()
     start_time_limit = now_utc - timedelta(hours=lookback_hours)
     limit_dt = start_time_limit
@@ -223,9 +204,7 @@ async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
         return []
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STAGE 1: Collect and Save RAW Data (runs every 5 min)
-# ══════════════════════════════════════════════════════════════════════════════
+# Stage 1: collect raw data
 
 def process_messages_to_hourly(messages: list[dict]) -> pd.DataFrame:
     """
@@ -266,10 +245,7 @@ def process_messages_to_hourly(messages: list[dict]) -> pd.DataFrame:
 
 
 def collect_raw_data():
-    """
-    STAGE 1: Scrape Telegram, aggregate to hourly, update rolling 48h history.
-    This runs frequently (e.g., every 5 minutes).
-    """
+    """Scrape Telegram and update rolling 48h hourly history."""
     log.info("=" * 60)
     log.info("STAGE 1: COLLECTING RAW TELEGRAM DATA")
     log.info("=" * 60)
@@ -350,20 +326,15 @@ def collect_raw_data():
     log.info("=" * 60)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STAGE 2: Generate Features with Lags (runs hourly)
-# ══════════════════════════════════════════════════════════════════════════════
+# Stage 2: generate features
 
 def generate_features():
-    """
-    STAGE 2: Process raw 48h data to generate lag features for next 24h.
+    """Generate lag features for T+1..T+24.
 
-    LAG LOGIC (UNCHANGED FROM ORIGINAL):
-    - For hour T+N (N hours into the future):
-      - lag1h = value from T-1 (exists only for T+1)
-      - lag3h = value from T-3 (exists for T+1...T+3)
-      - lag6h = value from T-6 (exists for T+1...T+6)
-      - If lag doesn't exist for that future hour → NaN
+    Lag rules:
+    - lag1h: value at T (used for T+1)
+    - lag3h: value at T-2..T (used for T+1..T+3)
+    - lag6h: value at T-5..T (used for T+1..T+6)
     """
     log.info("=" * 60)
     log.info("STAGE 2: GENERATING FEATURES FOR MODEL INPUT")
@@ -451,9 +422,9 @@ def generate_features():
     log.info(f"Regions: {len(df_output['region'].unique())}")
     log.info(f"Hours: {df_output['datetime'].min()} → {df_output['datetime'].max()}")
 
-    # Show lag coverage statistics
+    # log lag coverage for first few lag columns
     lag_cols = [col for col in df_output.columns if 'lag' in col]
-    for col in lag_cols[:3]:  # Show first 3 as example
+    for col in lag_cols[:3]:
         non_nan = df_output[col].notna().sum()
         total = len(df_output)
         log.info(f"{col}: {non_nan}/{total} non-NaN values ({100*non_nan/total:.1f}%)")
@@ -461,20 +432,10 @@ def generate_features():
     log.info("=" * 60)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Main Entry Point
-# ══════════════════════════════════════════════════════════════════════════════
+# Main entry
 
 def main():
-    """
-    Main execution function.
-
-    For cron setup:
-    - Run collect_raw_data() every 5 minutes:   */5 * * * *
-    - Run generate_features() every hour:       0 * * * *
-
-    Or run both sequentially for testing.
-    """
+    """Main entry. Use 'collect' or 'generate' as argument."""
     import sys
 
     if len(sys.argv) > 1:
