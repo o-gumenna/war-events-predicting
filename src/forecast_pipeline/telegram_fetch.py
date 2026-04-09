@@ -161,8 +161,8 @@ async def scrape_messages(lookback_hours: int, stopwords) -> list[dict]:
 
     log.info(f"Connecting to Telegram to scrape last {lookback_hours}h...")
 
-    # use naive UTC timestamps
-    now_utc = datetime.utcnow()
+    # tz-aware UTC — стандарт пайплайну
+    now_utc = datetime.now(timezone.utc)
     start_time_limit = now_utc - timedelta(hours=lookback_hours)
     limit_dt = start_time_limit
 
