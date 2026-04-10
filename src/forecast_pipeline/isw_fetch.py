@@ -412,11 +412,15 @@ def build_hourly_rows(
     Each row receives an identical copy of the features since reports are published
     once per day and cover the entire following 24-hour window.
     All datetimes are UTC, floored to the hour.
+    
+    T = остання закрита година (див. process_alarms_final.py).
+    forecast = T+1..T+24
     """
     now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    T = now_utc - timedelta(hours=1)
     rows    = []
     for h in range(1, HOURS_AHEAD + 1):
-        dt  = now_utc + timedelta(hours=h)
+        dt  = T + timedelta(hours=h)
         row = {"datetime": dt.isoformat(), "isw_report_date": report_date_str}
         row.update(geo_feats)
         row.update(lag_roll_feats)

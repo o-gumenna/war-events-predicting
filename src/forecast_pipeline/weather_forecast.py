@@ -132,9 +132,13 @@ def main():
         return
 
     now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    forecast_start = now_utc + timedelta(hours=1)
-    forecast_end = now_utc + timedelta(hours=24)
-    history_cutoff = now_utc - timedelta(hours=48)  # Keep 48h of history max
+    
+    # T = остання ЗАКРИТА година (див. process_alarms_final.py)
+    # forecast: T+1..T+24 — синхронізовано між усіма скриптами
+    T = now_utc - timedelta(hours=1)
+    forecast_start = T + timedelta(hours=1)
+    forecast_end   = T + timedelta(hours=24)
+    history_cutoff = T - timedelta(hours=48)  # Keep 48h of history max
 
     # 1. Load Local History
     hist_path = Path(HISTORY_FILE)

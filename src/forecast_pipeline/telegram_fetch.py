@@ -35,7 +35,7 @@ FEATURES_FILE = Path("data/telegram/telegram_features_24h.csv")
 
 RAW_HISTORY_HOURS = 48
 FORECAST_HOURS = 24
-SCRAPE_LOOKBACK_HOURS = 12
+SCRAPE_LOOKBACK_HOURS = 2  # Перезбираємо тільки останні 2h (з запасом на час cron)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -94,6 +94,9 @@ THREAT_DICT = {
 # but include it in lag features since model expects tg_all_clear_count_lag1h/lag3h)
 FEATURE_THREATS = ['tg_shaheds', 'tg_ballistic', 'tg_mig31', 'tg_cruise']
 LAG_THREATS = FEATURE_THREATS + ['tg_all_clear']  # all_clear included in lag output
+
+# Threats that have lag6h in the trained model (only shaheds and cruise)
+LAG6H_THREATS = {'tg_shaheds', 'tg_cruise'}
 
 
 # Text processing
@@ -316,8 +319,8 @@ def collect_raw_data():
     df_full = pd.DataFrame(index=grid).reset_index()
     df_full = df_full.merge(df_combined, on=['datetime', 'city'], how='left')
 
-    # Fill NaN with 0 for threat counts
-    count_cols = [f'{threat}_count' for threat in THREAT_DICT.keys()]
+    # Fill NaN with 0 for threat counts AND tg_msg_count
+    count_cols = [f'{threat}_count' for threat in THREAT_DICT.keys()] + ['tg_msg_count']
     for col in count_cols:
         if col in df_full.columns:
             df_full[col] = df_full[col].fillna(0).astype(int)
@@ -359,13 +362,16 @@ def generate_features():
     df_raw['datetime'] = pd.to_datetime(df_raw['datetime'], utc=True).dt.floor('h')
 
     now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    
+    # T = остання ЗАКРИТА година (див. process_alarms_final.py)
+    T = now_utc - timedelta(hours=1)
 
-    log.info(f"Reference time (T=0): {now_utc}")
+    log.info(f"Reference time (T=0): {T.isoformat()}")
     log.info(f"Loaded {len(df_raw)} raw hourly records")
 
     # Generate future hours grid (T+1 to T+24) — tz-aware UTC
     future_hours = pd.date_range(
-        start=now_utc + timedelta(hours=1),
+        start=T + timedelta(hours=1),
         periods=FORECAST_HOURS,
         freq='h',
         tz='UTC'
@@ -394,9 +400,9 @@ def generate_features():
             for threat in LAG_THREATS:  # включає tg_all_clear для lag1h і lag3h
                 threat_col = f'{threat}_count'
 
-                # lag1h: exists only for T+1
+                # lag1h: exists only for T+1 (value at T)
                 if hours_ahead == 1:
-                    lag1_dt = now_utc
+                    lag1_dt = T
                     lag1_val = city_hist[city_hist['datetime'] == lag1_dt][threat_col].values
                     row_data[f'{threat}_count_lag1h'] = int(lag1_val[0]) if len(lag1_val) > 0 else 0
                 else:
@@ -404,16 +410,16 @@ def generate_features():
 
                 # lag3h: exists for T+1 to T+3
                 if hours_ahead <= 3:
-                    lag3_dt = now_utc - timedelta(hours=(3 - hours_ahead))
+                    lag3_dt = T - timedelta(hours=(3 - hours_ahead))
                     lag3_val = city_hist[city_hist['datetime'] == lag3_dt][threat_col].values
                     row_data[f'{threat}_count_lag3h'] = int(lag3_val[0]) if len(lag3_val) > 0 else 0
                 else:
                     row_data[f'{threat}_count_lag3h'] = float('nan')
 
-                # lag6h: існує тільки для threat-типів (не для tg_all_clear)
-                if threat in FEATURE_THREATS:
+                # lag6h: тільки для threats, що мають lag6h у trained моделі (shaheds, cruise)
+                if threat in LAG6H_THREATS:
                     if hours_ahead <= 6:
-                        lag6_dt = now_utc - timedelta(hours=(6 - hours_ahead))
+                        lag6_dt = T - timedelta(hours=(6 - hours_ahead))
                         lag6_val = city_hist[city_hist['datetime'] == lag6_dt][threat_col].values
                         row_data[f'{threat}_count_lag6h'] = int(lag6_val[0]) if len(lag6_val) > 0 else 0
                     else:
@@ -423,20 +429,20 @@ def generate_features():
             msg_col = 'tg_msg_count'
             if msg_col in city_hist.columns:
                 if hours_ahead == 1:
-                    v = city_hist[city_hist['datetime'] == now_utc][msg_col].values
+                    v = city_hist[city_hist['datetime'] == T][msg_col].values
                     row_data['tg_msg_count_lag1h'] = int(v[0]) if len(v) > 0 else 0
                 else:
                     row_data['tg_msg_count_lag1h'] = float('nan')
 
                 if hours_ahead <= 3:
-                    lag3_dt = now_utc - timedelta(hours=(3 - hours_ahead))
+                    lag3_dt = T - timedelta(hours=(3 - hours_ahead))
                     v = city_hist[city_hist['datetime'] == lag3_dt][msg_col].values
                     row_data['tg_msg_count_lag3h'] = int(v[0]) if len(v) > 0 else 0
                 else:
                     row_data['tg_msg_count_lag3h'] = float('nan')
 
                 if hours_ahead <= 6:
-                    lag6_dt = now_utc - timedelta(hours=(6 - hours_ahead))
+                    lag6_dt = T - timedelta(hours=(6 - hours_ahead))
                     v = city_hist[city_hist['datetime'] == lag6_dt][msg_col].values
                     row_data['tg_msg_count_lag6h'] = int(v[0]) if len(v) > 0 else 0
                 else:

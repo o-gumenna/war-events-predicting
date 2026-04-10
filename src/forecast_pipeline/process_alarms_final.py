@@ -49,11 +49,13 @@ def process_alarms():
     df.rename(columns={"datetime_h": "datetime"}, inplace=True)
 
     # 4. ВИЗНАЧАЄМО МЕЖІ ЧАСУ
-    # T = поточна година (вже округлена вище в now_utc).
-    # Прогноз: T+1 .. T+24 — консистентно з усіма іншими скриптами пайплайну.
-    T = now_utc  # НЕ now_utc - 1h (та помилка давала зсув на 1 годину відносно weather/isw/telegram)
+    # now_utc = округлена до :00 поточна година (напр., 21:00 якщо час 21:02)
+    # Але попередня година (20:00-20:59) закрита й готова до обробки.
+    # T = остання ЗАКРИТА година = now_utc - 1h
+    # forecast: T+1..T+24 означає, що час T входить як першої години в фіч-вікно
+    T = now_utc - timedelta(hours=1)
 
-    forecast_start = T + timedelta(hours=1)
+    forecast_start = T + timedelta(hours=1)  # = now_utc
     forecast_end   = T + timedelta(hours=24)
 
     # 5. БУДУЄМО СІТКУ (Історія + 24 години майбутнього)

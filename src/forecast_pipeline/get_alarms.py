@@ -101,8 +101,8 @@ def collect_alarms():
         df_hist = pd.DataFrame()
 
     df_full = pd.concat([df_hist, df_new], ignore_index=True)
-    # parse datetimes — utc=True коректно обробляє і "+00:00", і naive рядки
-    df_full["datetime"] = pd.to_datetime(df_full["datetime"], utc=True)
+    # format='ISO8601' коректно обробляє і "+00:00", і naive рядки, і мішані формати
+    df_full["datetime"] = pd.to_datetime(df_full["datetime"], format='ISO8601', utc=True)
 
     cutoff_time = now_utc - timedelta(hours=48)
     df_full = df_full[df_full["datetime"] >= cutoff_time]
