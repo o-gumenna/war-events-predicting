@@ -345,9 +345,14 @@ def load_history() -> list[dict]:
 
 
 def save_history(history: list[dict]) -> None:
-    """Persist the most recent 7 daily threat score records to disk."""
+    """Persist the most recent 7 daily threat score records to disk (no duplicates)."""
+    # Дедуплікація за датою — залишаємо останній запис для кожної дати
+    seen: dict[str, dict] = {}
+    for entry in history:
+        seen[entry["date"]] = entry
+    deduped = sorted(seen.values(), key=lambda x: x["date"])
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    HISTORY_FILE.write_text(json.dumps(history[-7:], indent=2))
+    HISTORY_FILE.write_text(json.dumps(deduped[-7:], indent=2))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
