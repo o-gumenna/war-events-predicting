@@ -28,7 +28,7 @@ load_dotenv()
 API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
 
-CHANNEL_USERNAME = 'air_alert_ua'
+CHANNEL_USERNAME = 'kpszsu'
 
 RAW_FILE = Path("data/telegram/telegram_raw_48h.csv")
 FEATURES_FILE = Path("data/telegram/telegram_features_24h.csv")
