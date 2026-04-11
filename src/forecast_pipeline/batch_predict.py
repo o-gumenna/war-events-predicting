@@ -10,8 +10,8 @@ Runs every hour (via cron at :10 minute mark):
 
 Output format per city/hour:
   {
-    "0": {"probability": 85, "alarm": true,  "threats": {"ballistic": false, "drones": true, "cruise": false, "guided": false}},
-    "1": {"probability": 20, "alarm": false, "threats": null},
+        "12:00": {"probability": 85, "alarm": true,  "threats": {"ballistic": false, "drones": true, "cruise": false, "guided": false}},
+        "13:00": {"probability": 20, "alarm": false, "threats": null},
   }
 
 Usage:
@@ -107,7 +107,7 @@ def run_batch_predictions(v1_bundle, v2_bundle, features_df):
     v1 bundle keys: model, threshold, features
     v2 bundle keys: model, thresholds (dict label->float), features, label_cols
 
-    Returns: dict  city -> {str(hour_idx): {probability, alarm, threats}}
+    Returns: dict  city -> {HH:MM: {probability, alarm, threats}}
     """
     # v1: binary
     v1_model     = v1_bundle["model"]
@@ -153,6 +153,11 @@ def run_batch_predictions(v1_bundle, v2_bundle, features_df):
     predictions_by_city = {}
     city_hour_counter   = {}
 
+    # Prefer real forecast timestamps as keys (HH:MM), fallback to sequential index
+    datetimes = None
+    if "datetime" in features_df.columns:
+        datetimes = pd.to_datetime(features_df["datetime"], utc=True, errors="coerce")
+
     for idx in range(len(features_df)):
         city = regions.iloc[idx]
 
@@ -160,8 +165,11 @@ def run_batch_predictions(v1_bundle, v2_bundle, features_df):
             predictions_by_city[city] = {}
             city_hour_counter[city]   = 0
 
-        hour_str = str(city_hour_counter[city])
-        city_hour_counter[city] += 1
+        if datetimes is not None and not pd.isna(datetimes.iloc[idx]):
+            hour_str = datetimes.iloc[idx].strftime("%H:%M")
+        else:
+            hour_str = str(city_hour_counter[city])
+            city_hour_counter[city] += 1
 
         prob  = float(v1_probs[idx])
         alarm = bool(v1_alarm[idx])
