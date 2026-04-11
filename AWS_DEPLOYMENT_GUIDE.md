@@ -199,30 +199,54 @@ sudo vi /etc/nginx/conf.d/warevents.conf
 ```nginx
 upstream warevents_api {
     server 127.0.0.1:5000;
+    keepalive 32;
 }
 
 server {
     listen 80;
     server_name your-domain.com;
-    return 301 https://$server_name$request_uri;
-}
 
-server {
-    listen 443 ssl http2;
-    server_name your-domain.com;
-
-    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+    root /home/ubuntu/war-events-predicting/alarm_pred/dist;
+    index index.html;
 
     location /api/ {
         proxy_pass http://warevents_api;
+        proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
+
+    location = /health {
+        proxy_pass http://warevents_api;
+        proxy_set_header Host $host;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
 }
 ```
+
+Готовий шаблон конфігу є в репозиторії:
+
+- `deploy/nginx/warevents.conf`
+
+Кроки для застосування:
+
+```bash
+cd /home/ubuntu/war-events-predicting/alarm_pred
+npm install
+npm run build
+
+sudo cp /home/ubuntu/war-events-predicting/deploy/nginx/warevents.conf /etc/nginx/conf.d/warevents.conf
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Після переходу на Nginx можна закрити публічний доступ до 5000 порту в Security Group
+і залишити Flask/Gunicorn доступним лише локально (127.0.0.1).
 
 Перезавантажити Nginx:
 

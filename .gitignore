@@ -7,7 +7,6 @@ logs/
 
 # pkl files
 models/*.pkl
-isw_*.pkl
 src/forecast_pipeline/*.pkl
 
 # local/testing and temp script folders
