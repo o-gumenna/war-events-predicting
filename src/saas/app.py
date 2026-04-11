@@ -9,8 +9,8 @@ Endpoints:
 
 Response format:
   {
-    "last_model_train_time": "2026-04-08T10:30:00Z",
-    "last_prediction_time": "2026-04-09T14:00:00Z",
+    "last_model_train_time": "2026-04-10T16:50:00Z",
+    "last_prediction_time": "2026-04-11T14:00:00Z",
     "regions_forecast": {
       "Kyiv": {
                 "12:00": {"probability": 85, "alarm": true, "threats": {"ballistic": false, "drones": true, "cruise": false, "guided": false}},

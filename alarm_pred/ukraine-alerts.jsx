@@ -43,7 +43,7 @@ const THREAT_LABELS = {
   ballistic: { label: 'Балістичні ракети / МіГ-31', labelShort: 'БАЛ', icon: Target,    color: '#ef4444' },
   drones:    { label: 'Шахеди / Дрони',             labelShort: 'БПЛА', icon: Plane,     color: '#be123c' },
   cruise:    { label: 'Крилаті ракети',             labelShort: 'КР',   icon: Zap,       color: '#f97316' },
-  guided:    { label: 'Керовані бомби (ФАБ)',        labelShort: 'КАБ',  icon: Crosshair, color: '#eab308' },
+  guided:    { label: 'Керовані бомби',              labelShort: 'КАБ',  icon: Crosshair, color: '#eab308' },
 };
 
 const getActiveThreats = (threats) => {
@@ -213,7 +213,13 @@ const UkraineAlerts = () => {
     if (!data?.regions_forecast) return [];
     const firstRegion = Object.values(data.regions_forecast)[0];
     if (!firstRegion) return [];
-    return Object.keys(firstRegion).sort();
+    // Sort chronologically from current UTC hour (forecast: T+1..T+24 UTC)
+    const nowUtcH = new Date().getUTCHours();
+    return [...Object.keys(firstRegion)].sort((a, b) => {
+      const ha = (parseInt(a) - nowUtcH + 24) % 24;
+      const hb = (parseInt(b) - nowUtcH + 24) % 24;
+      return ha - hb;
+    });
   }, [data]);
 
   const getRegionForecast = (regionName) => {
@@ -241,7 +247,14 @@ const UkraineAlerts = () => {
     });
   };
 
-  const formatHourLabel = (hourIdx) => sortedHourKeys[hourIdx] || '—';
+  // Convert UTC HH:MM key to Kyiv time (UTC+3) for display
+  const utcKeyToKyiv = (key) => {
+    if (!key) return '—';
+    const [h, m] = key.split(':').map(Number);
+    const kyivH = (h + 3) % 24;
+    return `${String(kyivH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  };
+  const formatHourLabel = (hourIdx) => utcKeyToKyiv(sortedHourKeys[hourIdx]);
 
   // статистика по всіх регіонах
   const stats = useMemo(() => {

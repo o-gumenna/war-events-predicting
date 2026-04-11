@@ -199,8 +199,10 @@ def run_batch_predictions(v1_bundle, v2_bundle, features_df):
 
 def save_predictions(predictions_by_city):
     now_utc  = datetime.now(timezone.utc).isoformat()
+    # Model trained on 2026-04-10 19:50 Kyiv (16:50 UTC) - not retraining automatically
+    last_train_time = "2026-04-10T16:50:00Z"
     output   = {
-        "last_model_train_time": now_utc,
+        "last_model_train_time": last_train_time,
         "last_prediction_time":  now_utc,
         "regions_forecast":      predictions_by_city,
     }
