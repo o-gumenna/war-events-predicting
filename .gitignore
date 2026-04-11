@@ -5,8 +5,15 @@ output/
 # logs
 logs/
 
-# ML models
+# pkl files
 models/*.pkl
+isw_*.pkl
+src/forecast_pipeline/*.pkl
+
+# local/testing and temp script folders
+tests/
+scripts/
+src/**/run_*.sh
 
 # keys
 .env

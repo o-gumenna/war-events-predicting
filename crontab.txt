@@ -1,0 +1,31 @@
+# Crontab configuration для WarEvents forecasting
+#
+# Install with:
+#   crontab -e
+#   # Paste these lines
+#   # Save and exit (Ctrl-X in nano, :wq in vi)
+#
+# Verify with:
+#   crontab -l
+#   tail -f /var/log/cron  (or /var/log/syslog)
+
+# Environment variables
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/ec2-user/WarEvents/venv/bin
+HOME=/home/ec2-user
+
+# Batch predictions - запускається кожну годину о :08 хвилині
+# Time: :01 - weather_forecast.py
+# Time: :02 - get_alarms.py + process_alarms_final.py
+# Time: :03 - isw_fetch.py
+# Time: :04 - telegram_fetch.py
+# Time: :08 - merge_features.py
+# Time: :10 - batch_predict.py (ML predictions)
+
+8 * * * * cd /home/ec2-user/WarEvents && bash src/forecast_pipeline/run_batch.sh >> /home/ec2-user/WarEvents/data/logs/cron.log 2>&1
+
+# Optional: backup predictions daily at 00:05 UTC
+5 0 * * * tar -czf /home/ec2-user/WarEvents/data/backups/predictions_$(date +\%Y\%m\%d).tar.gz /home/ec2-user/WarEvents/data/predictions/ 2>> /home/ec2-user/WarEvents/data/logs/backup.log
+
+# Optional: cleanup old logs weekly (keep 30 days)
+0 3 * * 0 find /home/ec2-user/WarEvents/data/logs -name "*.log" -mtime +30 -delete 2>> /home/ec2-user/WarEvents/data/logs/cleanup.log
