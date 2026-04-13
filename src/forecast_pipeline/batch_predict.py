@@ -93,7 +93,9 @@ def prepare_X(df, expected_features):
         if col not in df.columns:
             log.warning(f"  Missing feature '{col}', filling with NaN")
             df[col] = np.nan
-    return df[expected_features].to_numpy(dtype=np.float64, na_value=np.nan)
+    # Keep a DataFrame with named columns to match model training input schema.
+    X = df[expected_features].apply(pd.to_numeric, errors="coerce")
+    return X
 
 
 # ============================================================================
@@ -167,9 +169,11 @@ def run_batch_predictions(v1_bundle, v2_bundle, features_df):
 
         if datetimes is not None and not pd.isna(datetimes.iloc[idx]):
             hour_str = datetimes.iloc[idx].strftime("%H:%M")
+            slot_datetime_utc = datetimes.iloc[idx].strftime("%Y-%m-%dT%H:%M:%SZ")
         else:
             hour_str = str(city_hour_counter[city])
             city_hour_counter[city] += 1
+            slot_datetime_utc = None
 
         prob  = float(v1_probs[idx])
         alarm = bool(v1_alarm[idx])
@@ -188,6 +192,7 @@ def run_batch_predictions(v1_bundle, v2_bundle, features_df):
             "probability": int(round(prob * 100)),
             "alarm":       alarm,
             "threats":     threats,
+            "slot_datetime_utc": slot_datetime_utc,
         }
 
     return predictions_by_city

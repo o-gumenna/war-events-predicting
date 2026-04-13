@@ -209,23 +209,69 @@ const UkraineAlerts = () => {
     return () => clearInterval(timer);
   }, []);
 
-  const sortedHourKeys = useMemo(() => {
+  const sortedSlots = useMemo(() => {
     if (!data?.regions_forecast) return [];
     const firstRegion = Object.values(data.regions_forecast)[0];
     if (!firstRegion) return [];
-    // Sort chronologically from current UTC hour (forecast: T+1..T+24 UTC)
+    const slots = Object.entries(firstRegion).map(([key, payload]) => ({
+      key,
+      slotUtc: payload?.slot_datetime_utc || null,
+    }));
+
+    // Preferred path: sort by exact UTC datetime from backend.
+    const hasExactUtc = slots.every((s) => typeof s.slotUtc === 'string' && s.slotUtc.length > 0);
+    if (hasExactUtc) {
+      return slots.sort((a, b) => new Date(a.slotUtc) - new Date(b.slotUtc));
+    }
+
+    // Backward-compatible fallback for legacy payloads with HH:MM keys only.
     const nowUtcH = new Date().getUTCHours();
-    return [...Object.keys(firstRegion)].sort((a, b) => {
-      const ha = (parseInt(a) - nowUtcH + 24) % 24;
-      const hb = (parseInt(b) - nowUtcH + 24) % 24;
+    return slots.sort((a, b) => {
+      const ha = (parseInt(a.key, 10) - nowUtcH + 24) % 24;
+      const hb = (parseInt(b.key, 10) - nowUtcH + 24) % 24;
       return ha - hb;
     });
   }, [data]);
 
+  const visibleSlots = useMemo(() => {
+    if (!sortedSlots.length) return [];
+
+    const nowHourUtc = new Date(currentTime);
+    nowHourUtc.setUTCMinutes(0, 0, 0);
+
+    const lastPrediction = data?.last_prediction_time ? new Date(data.last_prediction_time) : null;
+    if (lastPrediction && !Number.isNaN(lastPrediction.getTime())) {
+      const predictionHourUtc = new Date(lastPrediction);
+      predictionHourUtc.setUTCMinutes(0, 0, 0);
+
+      // Batch generated at HH:10 is valid for [generation_hour .. generation_hour+23].
+      // During the first 10 minutes of next hour, keep only still-valid slots.
+      const maxValidHourUtc = new Date(predictionHourUtc.getTime() + 23 * 60 * 60 * 1000);
+
+      return sortedSlots.filter((slot) => {
+        if (!slot.slotUtc) return true;
+        const slotUtc = new Date(slot.slotUtc);
+        return slotUtc >= nowHourUtc && slotUtc <= maxValidHourUtc;
+      });
+    }
+
+    // Legacy fallback when prediction timestamp is missing.
+    return sortedSlots.filter((slot) => {
+      if (!slot.slotUtc) return true;
+      const slotUtc = new Date(slot.slotUtc);
+      return slotUtc >= nowHourUtc;
+    });
+  }, [sortedSlots, currentTime, data?.last_prediction_time]);
+
+  useEffect(() => {
+    const maxIdx = Math.max(0, visibleSlots.length - 1);
+    if (selectedHour > maxIdx) setSelectedHour(maxIdx);
+  }, [visibleSlots, selectedHour]);
+
   const getRegionForecast = (regionName) => {
     if (!data?.regions_forecast?.[regionName]) return null;
     const hourlyMap = data.regions_forecast[regionName];
-    const timeKey = sortedHourKeys[selectedHour];
+    const timeKey = visibleSlots[selectedHour]?.key;
     return timeKey ? hourlyMap[timeKey] : Object.values(hourlyMap)[0];
   };
 
@@ -247,19 +293,27 @@ const UkraineAlerts = () => {
     });
   };
 
-  // Convert UTC HH:MM key to Kyiv time (UTC+3) for display
-  const utcKeyToKyiv = (key) => {
-    if (!key) return '—';
-    const [h, m] = key.split(':').map(Number);
+  const formatHourLabel = (hourIdx) => {
+    const slot = visibleSlots[hourIdx];
+    if (!slot) return '—';
+
+    if (slot.slotUtc) {
+      return new Date(slot.slotUtc).toLocaleString('uk-UA', {
+        hour: '2-digit', minute: '2-digit',
+        timeZone: 'Europe/Kyiv'
+      });
+    }
+
+    // Legacy fallback when backend has only HH:MM keys.
+    const [h, m] = slot.key.split(':').map(Number);
     const kyivH = (h + 3) % 24;
     return `${String(kyivH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   };
-  const formatHourLabel = (hourIdx) => utcKeyToKyiv(sortedHourKeys[hourIdx]);
 
   // статистика по всіх регіонах
   const stats = useMemo(() => {
     if (!data?.regions_forecast) return { activeAlerts: 0, safe: 0, avgProb: 0 };
-    const timeKey = sortedHourKeys[selectedHour];
+    const timeKey = visibleSlots[selectedHour]?.key;
     let activeAlerts = 0, safe = 0, totalProb = 0, count = 0;
     Object.values(data.regions_forecast).forEach(hourlyMap => {
       const forecast = timeKey ? hourlyMap[timeKey] : Object.values(hourlyMap)[0];
@@ -269,7 +323,19 @@ const UkraineAlerts = () => {
       count++;
     });
     return { activeAlerts, safe, avgProb: count > 0 ? Math.round(totalProb / count) : 0 };
-  }, [data, selectedHour, sortedHourKeys]);
+  }, [data, selectedHour, visibleSlots]);
+
+  const selectedHourOffset = useMemo(() => {
+    const slot = visibleSlots[selectedHour];
+    if (!slot) return null;
+    if (slot.slotUtc) {
+      const nowHourUtc = new Date(currentTime);
+      nowHourUtc.setUTCMinutes(0, 0, 0);
+      const slotUtc = new Date(slot.slotUtc);
+      return Math.round((slotUtc - nowHourUtc) / (60 * 60 * 1000));
+    }
+    return selectedHour;
+  }, [visibleSlots, selectedHour, currentTime]);
 
   if (loading || !geoData) {
     return (
@@ -475,7 +541,7 @@ const UkraineAlerts = () => {
             }}>
               {formatHourLabel(selectedHour)}
               <span style={{ color: '#94a3b8', marginLeft: '0.5rem', fontSize: '0.85rem' }}>
-                ({selectedHour === 0 ? 'зараз' : `+${selectedHour} слот`})
+                ({selectedHourOffset === 0 ? 'зараз' : `+${Math.max(0, selectedHourOffset ?? selectedHour)} год`})
               </span>
             </div>
           </div>
@@ -500,7 +566,7 @@ const UkraineAlerts = () => {
               }} />
               <input
                 type="range"
-                min="0" max={Math.max(0, sortedHourKeys.length - 1)}
+                min="0" max={Math.max(0, visibleSlots.length - 1)}
                 value={selectedHour}
                 onChange={(e) => setSelectedHour(parseInt(e.target.value))}
                 style={{
@@ -524,7 +590,7 @@ const UkraineAlerts = () => {
             
             <button 
               className="hour-btn"
-              onClick={() => setSelectedHour(Math.min(Math.max(0, sortedHourKeys.length - 1), selectedHour + 1))}
+              onClick={() => setSelectedHour(Math.min(Math.max(0, visibleSlots.length - 1), selectedHour + 1))}
               style={{
                 width: '36px', height: '36px', border: 'none', borderRadius: '8px',
                 display: 'flex', alignItems: 'center', justifyContent: 'center'
@@ -668,10 +734,11 @@ const UkraineAlerts = () => {
                   {/* Mini hourly chart */}
                   <div style={{ marginTop: '0.5rem' }}>
                     <div style={{ fontSize: '0.7rem', color: '#94a3b8', marginBottom: '0.5rem' }}>
-                      Прогноз на {sortedHourKeys.length} годин
+                      Прогноз на {visibleSlots.length} годин
                     </div>
                     <div style={{ display: 'flex', gap: '2px', height: '40px', alignItems: 'flex-end' }}>
-                      {sortedHourKeys.map((key, i) => {
+                      {visibleSlots.map((slot, i) => {
+                        const key = slot.key;
                         const hourData = data.regions_forecast[selectedRegion]?.[key];
                         const prob = hourData?.probability || 0;
                         const hStyles = getThreatStyle(prob);
