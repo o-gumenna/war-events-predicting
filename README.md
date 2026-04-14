@@ -2,9 +2,9 @@
 
 WarEvents is a forecasting project that combines data collection, feature engineering, batch prediction, a small Flask API, and a React frontend.
 
-The project is organized as one repository with one backend API. Data collection and forecasting scripts prepare files in `data/`, `src/forecast_pipeline/batch_predict.py` generates the latest prediction JSON, `src/saas/app.py` serves it through REST endpoints, and `alarm_pred/` displays the forecast in the frontend.
+The project is organized as one repository with one backend API. Data collection and forecasting scripts prepare files in `data/`, `src/forecast_pipeline/batch_predict.py` generates the latest prediction JSON, `src/saas/app.py` serves it through REST endpoints, and `alarm_pred/` displays the forecast in the frontend. Project runs on an AWS Ubuntu server and is updated by cron jobs.
 
-This repository is best understood as three connected parts:
+This repository operates as three connected parts:
 
 - `alarm_pred/` contains the frontend
 - `src/saas/` contains the backend API
@@ -16,7 +16,6 @@ Repository structure:
 - `src/saas/` Flask API
 - `src/forecast_pipeline/` feature preparation and batch prediction
 - `src/data_collection/` older and auxiliary data collection scripts
-- `tests/` automated tests
 - `notebooks/` research and training notebooks
 - `docs/` project documentation
 
@@ -87,6 +86,5 @@ Additional notes:
 
 - `src/data_collection/` and `notebooks/` are useful for research and historical preparation, but they are not required for understanding the main frontend + API flow.
 - the repository contains forecasting output, not an official warning system
-- the current deployment runs on an AWS Ubuntu server and refreshes forecast data through cron jobs
 - if you want deployment details, see `docs/deployment.md`
 - if you want a short architecture overview, see `docs/pipeline.md`
