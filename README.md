@@ -1,101 +1,71 @@
-# War Events Prediction SaaS
+# WarEvents
 
-Python project for hourly air-alert forecasting by region in Ukraine.
+WarEvents is a forecasting project that combines data collection, feature engineering, batch prediction, a small Flask API, and a React frontend.
 
-## Unified Architecture
+The project is organized as one repository with one backend API. Data collection and forecasting scripts prepare files in `data/`, `src/forecast_pipeline/batch_predict.py` generates the latest prediction JSON, `src/saas/app.py` serves it through REST endpoints, and `alarm_pred/` displays the forecast in the frontend.
 
-This repository should run as a single project with one canonical backend API:
+This repository is best understood as three connected parts:
 
-1. Data collectors and feature scripts write CSV files into `data/`
-2. `src/forecast_pipeline/merge_features.py` builds `data/final/FINAL_FEATURES_24H.csv`
-3. `src/forecast_pipeline/batch_predict.py` generates `data/predictions/predictions_latest.json`
-4. `src/saas/app.py` serves that JSON via REST (`/api/forecast`)
-5. `alarm_pred/` frontend reads `/api/forecast`
+- `alarm_pred/` contains the frontend
+- `src/saas/` contains the backend API
+- `src/forecast_pipeline/` contains the ML and prediction pipeline
 
-Important: `src/saas/app.py` is the main API for this project.
-There is no separate Flask backend inside `alarm_pred/`.
+Repository structure:
 
-## Repository Structure
+- `alarm_pred/` React + Vite frontend
+- `src/saas/` Flask API
+- `src/forecast_pipeline/` feature preparation and batch prediction
+- `src/data_collection/` older and auxiliary data collection scripts
+- `tests/` automated tests
+- `notebooks/` research and training notebooks
+- `docs/` project documentation
 
-- `src/data_collection/` data collection scripts
-- `src/forecast_pipeline/` feature engineering + prediction batch
-- `src/saas/` Flask API for frontend integration
-- `alarm_pred/` Vite + React frontend
-
-## Installation
-
-1. Clone repository
-
-```bash
-git clone <your-repo-url>
-cd <your-repo-name>
-```
-
-2. Install Python dependencies
+How to install:
 
 ```bash
 pip install -r requirements.txt
-```
-
-3. Install frontend dependencies
-
-```bash
 cd alarm_pred
 npm install
 cd ..
 ```
 
-## Frontend-Backend Integration
+Backend environment:
 
-Frontend supports two modes:
+Create a root `.env` file based on `.env.example` if you want to run data collection scripts or use external APIs.
 
-- Same-origin mode (default): frontend requests `/api/forecast`
-- Direct API mode: set `VITE_API_BASE_URL` to call backend directly
+Frontend environment:
 
-For local dev proxy, configure target API via env:
+The frontend can work in two modes:
 
-```bash
-cd alarm_pred
-export VITE_API_PROXY_TARGET=http://127.0.0.1:5000
-npm run dev
-```
+- same-origin mode, where it requests `/api/forecast`
+- direct API mode, where `VITE_API_BASE_URL` points to the backend
 
-Optional direct mode (without proxy path rewriting in code):
+Use `alarm_pred/.env.example` as a reference for frontend variables.
+
+How to run the backend API:
 
 ```bash
-cd alarm_pred
-export VITE_API_BASE_URL=http://127.0.0.1:5000
-npm run dev
+python src/saas/app.py --host 127.0.0.1 --port 5000
 ```
 
-For production on server:
+Main endpoints:
 
-1. Build frontend in `alarm_pred/` using `npm run build`
-2. Serve static files from `alarm_pred/dist/` via Nginx (or another static server)
-3. Route `/api/*` to Flask API from `src/saas/app.py`
-
-In this setup, frontend does not require a separate backend process.
-
-## Environment Variables
-
-Server root `.env` remains backend-only (API credentials and collectors keys).
-Frontend env is separate and optional in `alarm_pred/.env` (Vite build-time vars).
-
-- `VITE_API_BASE_URL`: optional direct API URL for browser requests
-- `VITE_API_PROXY_TARGET`: dev-only proxy target for `npm run dev`
-
-## Run API
-
-```bash
-python src/saas/app.py --host 0.0.0.0 --port 5000
-```
-
-Main endpoint:
-
+- `GET /health`
 - `GET /api/forecast?region=all`
 - `GET /api/forecast?region=Kyiv`
+- `GET /api/regions`
+- `GET /api/metadata`
 
-## Core Pipeline Commands
+How to run the frontend locally:
+
+```bash
+cd alarm_pred
+npm run dev
+```
+
+By default, Vite proxies `/api` requests to `http://127.0.0.1:5000`.
+
+Core pipeline commands:
 
 ```bash
 python src/forecast_pipeline/isw_fetch.py
@@ -106,3 +76,16 @@ python src/forecast_pipeline/process_alarms_final.py
 python src/forecast_pipeline/merge_features.py
 python src/forecast_pipeline/batch_predict.py
 ```
+
+Testing:
+
+```bash
+pytest -q
+```
+
+Additional notes:
+
+- `src/data_collection/` and `notebooks/` are useful for research and historical preparation, but they are not required for understanding the main frontend + API flow.
+- the repository contains forecasting output, not an official warning system
+- if you want deployment details, see `docs/deployment.md`
+- if you want a short architecture overview, see `docs/pipeline.md`

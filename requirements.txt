@@ -16,3 +16,5 @@ flask-cors>=4.0.0
 gunicorn>=21.0.0
 telethon>=1.35.0
 pyyaml>=6.0
+xgboost>=2.0.0
+pytz>=2023.3

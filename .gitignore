@@ -1,13 +1,18 @@
-# large csv and json data files
+# logs
 data/
 output/
-
-# logs
 logs/
+*.log
+cron.log
+*.session
+alarm_session*
+npm-debug.log*
+
 
 # pkl files
 models/*.pkl
 src/forecast_pipeline/*.pkl
+*.pkl
 
 # local/testing and temp script folders
 tests/
@@ -16,13 +21,31 @@ src/**/run_*.sh
 
 # keys
 .env
+.env.local
+.env.production
 *.session
 secret_keys.json
 
 
-# sys Python
+# frontend
+node_modules/
+dist/
+build/
+.vite/
+.cache/
+
+
+# backend 
 __pycache__/
 *.pyc
+venv/
+.venv/
+.pytest_cache/
+*.ipynb_checkpoints/
+
+
+# OS files
 .DS_Store
 .idea/
-.ipynb_checkpoints/
+.vscode/
+Thumbs.db
