@@ -120,14 +120,14 @@ const generateMockData = () => {
       const alarm = prob >= 40;
       let threats = null;
       if (prob >= 30) {
-        // Генеруємо довільну комбінацію: 1, 2, 3 або 4 типи одночасно
+        // Generate a random multi-label combination for local mock data.
         const candidates = {
           ballistic: Math.random() > 0.5,
           drones:    Math.random() > 0.4,
           cruise:    Math.random() > 0.6,
           guided:    Math.random() > 0.65,
         };
-        // Гарантуємо що хоча б 1 тип активний
+        // Ensure at least one threat type stays active.
         const anyActive = Object.values(candidates).some(Boolean);
         if (!anyActive) {
           const keys = Object.keys(candidates);
@@ -175,7 +175,7 @@ const UkraineAlerts = () => {
     setError(null);
     fetch(FORECAST_ENDPOINT)
       .then(res => {
-        if (!res.ok) throw new Error(`Сервер повернув помилку: HTTP ${res.status}`);
+        if (!res.ok) throw new Error(`Server error: HTTP ${res.status}`);
         return res.json();
       })
       .then(raw => {
@@ -203,7 +203,7 @@ const UkraineAlerts = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // годинник
+  // Update the live clock once per second.
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
@@ -310,7 +310,7 @@ const UkraineAlerts = () => {
     return `${String(kyivH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   };
 
-  // статистика по всіх регіонах
+  // Aggregate country-level metrics for the current selection.
   const stats = useMemo(() => {
     if (!data?.regions_forecast) return { activeAlerts: 0, safe: 0, avgProb: 0 };
     const timeKey = visibleSlots[selectedHour]?.key;

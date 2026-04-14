@@ -1,11 +1,10 @@
 """
 merge_features.py
-────────────────────────────────────────────────────────────────────────────────
-Збирає всі підготовлені фічі та зливає їх в один датасет.
 
-Стандарт datetime: tz-aware UTC (pandas DatetimeTZDtype[ns, UTC]).
-Всі джерела приводяться до цього стандарту в load_and_prep().
-────────────────────────────────────────────────────────────────────────────────
+Combine all prepared feature tables into one final dataset.
+
+Datetime handling is standardized as tz-aware UTC.
+Each source is normalized to that format in load_and_prep().
 """
 
 import pandas as pd
@@ -34,35 +33,34 @@ ALL_REGIONS = [
 
 
 def load_and_prep(filepath: Path, date_col: str = 'datetime') -> pd.DataFrame | None:
-    """Читає CSV і нормалізує datetime до tz-aware UTC."""
+    """Read a CSV file and normalize its datetime column to tz-aware UTC."""
     if not filepath.exists():
-        log.warning(f"Файл не знайдено: {filepath.name}. Пропускаємо...")
+        log.warning(f"File not found: {filepath.name}. Skipping...")
         return None
     try:
         df = pd.read_csv(filepath)
-        # pd.to_datetime(..., utc=True) коректно обробляє:
-        #   - рядки з "+00:00" (ISW, weather)
-        #   - naive рядки (alarms, telegram) — інтерпретує як UTC
+        # utc=True keeps all sources on the same timeline,
+        # including offset-aware and naive timestamp strings.
         df[date_col] = pd.to_datetime(df[date_col], utc=True)
         return df
     except Exception as e:
-        log.error(f"Помилка читання {filepath.name}: {e}")
+        log.error(f"Failed to read {filepath.name}: {e}")
         return None
 
 
 def main():
-    log.info("=== Початок злиття фічей (Merge) ===")
+    log.info("=== Starting feature merge ===")
 
-    # 1. Тривоги (База)
+    # 1. Alarms are the base table.
     df_base = load_and_prep(FILE_ALARMS)
     if df_base is None or df_base.empty:
-        log.error("Файл тривог відсутній або порожній. Перервано.")
+        log.error("Alarm feature file is missing or empty. Stopping.")
         return
     if 'city' in df_base.columns:
         df_base = df_base.rename(columns={'city': 'region'})
     log.info(f"Alarms: {df_base.shape[0]} rows, {df_base['datetime'].min()} → {df_base['datetime'].max()}")
 
-    # 2. Погода
+    # 2. Merge weather features by datetime and region.
     df_weather = load_and_prep(FILE_WEATHER)
     if df_weather is not None and not df_weather.empty:
         if 'city' in df_weather.columns:
@@ -70,9 +68,9 @@ def main():
         df_base = pd.merge(df_base, df_weather, on=['datetime', 'region'], how='left')
         log.info(f"After weather merge: {df_base.shape}")
     else:
-        log.warning("Погоду пропущено — файл відсутній.")
+        log.warning("Weather features skipped because the file is missing.")
 
-    # 3. Телеграм
+    # 3. Merge Telegram features by datetime and region.
     df_tg = load_and_prep(FILE_TELEGRAM)
     if df_tg is not None and not df_tg.empty:
         if 'city' in df_tg.columns:
@@ -80,25 +78,25 @@ def main():
         df_base = pd.merge(df_base, df_tg, on=['datetime', 'region'], how='left')
         log.info(f"After telegram merge: {df_base.shape}")
     else:
-        log.warning("Telegram пропущено — файл відсутній.")
+        log.warning("Telegram features skipped because the file is missing.")
 
-    # 4. ISW — merge тільки по datetime (одна строка на годину, без регіону)
+    # 4. Merge ISW features by datetime only.
+    # ISW is a report-level signal, not a city-level table.
     df_isw = load_and_prep(FILE_ISW)
     if df_isw is not None and not df_isw.empty:
-        # Видаляємо isw_<region> колонки з ISW перед merge —
-        # вони не потрібні як окремі фічі для моделі (є is_city_in_isw)
+        # Drop region flags before the merge.
+        # They are reused below to build the city-specific indicator.
         isw_region_cols = [c for c in df_isw.columns if c.startswith("isw_") and
                            any(c == f"isw_{r}" for r in ALL_REGIONS)]
         df_isw_merge = df_isw.drop(columns=isw_region_cols, errors='ignore')
         df_base = pd.merge(df_base, df_isw_merge, on='datetime', how='left')
 
-        # 4a. is_city_in_isw: чи згадується місто у звіті ISW
-        # ISW-файл містить isw_<Region> = 1/0 для кожного регіону
+        # 4a. Build is_city_in_isw from the original per-region ISW flags.
         df_base['is_city_in_isw'] = 0
         for region in ALL_REGIONS:
             isw_col = f'isw_{region}'
             if isw_col in df_isw.columns:
-                # map datetime → isw_col value, then assign per-row
+                # Map each timestamp to the region flag and assign it row by row.
                 isw_lookup = df_isw.set_index('datetime')[isw_col]
                 mask = df_base['region'] == region
                 df_base.loc[mask, 'is_city_in_isw'] = (
@@ -106,18 +104,18 @@ def main():
                 )
         log.info(f"After ISW merge: {df_base.shape}")
     else:
-        log.warning("ISW пропущено — файл відсутній.")
+        log.warning("ISW features skipped because the file is missing.")
         df_base['is_city_in_isw'] = 0
 
-    # 5. Reddit-заглушки (не збираємо в realtime — даємо моделі нулі)
+    # 5. Reddit features are filled with zeros because they are not collected in realtime.
     for col in ['avg_comments', 'avg_upvote_ratio', 'reddit_city_count', 'lda_info_war', 'lda_politics_crimes']:
         df_base[col] = 0.0
 
-    # 6. One-Hot Encoding для міст (префікс city_, без drop_first щоб усі 23 міста)
+    # 6. Add full one-hot encoding for all modeled cities.
     df_base['city_for_ohe'] = df_base['region']
     df_base = pd.get_dummies(df_base, columns=['city_for_ohe'], prefix='city', dtype=int)
 
-    # Гарантуємо що всі 23 OHE-колонки присутні (можуть відсутні якщо регіон не з'явився)
+    # Ensure that every expected city column exists, even if a region is absent in this batch.
     for region in ALL_REGIONS:
         col = f'city_{region}'
         if col not in df_base.columns:
@@ -128,7 +126,7 @@ def main():
 
     log.info(f"Shape: {df_base.shape}")
     log.info(f"Datetime range: {df_base['datetime'].min()} → {df_base['datetime'].max()}")
-    log.info(f"=== Злиття завершено! Збережено у {OUTPUT_FILE.name} ===")
+    log.info(f"=== Feature merge finished. Saved to {OUTPUT_FILE.name} ===")
 
 
 if __name__ == "__main__":

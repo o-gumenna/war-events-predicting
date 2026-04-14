@@ -17,7 +17,7 @@ def get_weather_forecast(location: str, api_key: str):
         return None
 
 
-# test locally
+# Local smoke test.
 if __name__ == "__main__":
     TEST_API_KEY = "" 
     TEST_LOCATION = "Kyiv,Ukraine"
@@ -28,4 +28,4 @@ if __name__ == "__main__":
     if forecast_data:
         print("Data successfully received!")
         first_hour = forecast_data.get("days", [])[0].get("hours", [])[12]
-        print(f"Час: {first_hour.get('datetime')}, Temperature: {first_hour.get('temp')}°C")
+        print(f"Time: {first_hour.get('datetime')}, Temperature: {first_hour.get('temp')}°C")

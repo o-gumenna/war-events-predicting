@@ -60,7 +60,7 @@ def collect_alarms():
         print("ERROR: ALARM_API_USER or ALARM_API_KEY is missing.")
         return
 
-    # tz-aware UTC — стандарт пайплайну
+    # Use tz-aware UTC across the whole pipeline.
     now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     print(f"[{now_utc.isoformat()}] Fetching 5-min alarm snapshot...")
 
@@ -76,14 +76,14 @@ def collect_alarms():
         print(f"API Error: {e}")
         return
 
-    # Визначаємо активні регіони
+    # Identify regions with an active AIR alert.
     active_regions = set()
     for region in alerts_data:
         oblast_en = id_map.get(str(region.get("regionId", "")))
         if oblast_en and any(a.get("type") == "AIR" for a in region.get("activeAlerts", [])):
             active_regions.add(oblast_en)
 
-    # Формуємо поточний знімок
+    # Build the current snapshot for all modeled regions.
     new_rows = []
     for city in ALL_REGIONS:
         new_rows.append({
@@ -93,7 +93,7 @@ def collect_alarms():
         })
     df_new = pd.DataFrame(new_rows)
 
-    # Читаємо історію, дописуємо нове, відрізаємо старе (залишаємо 48 годин)
+    # Append the new snapshot and keep only the last 48 hours.
     path = Path(HISTORY_FILE)
     if path.exists():
         df_hist = pd.read_csv(path)
@@ -101,7 +101,7 @@ def collect_alarms():
         df_hist = pd.DataFrame()
 
     df_full = pd.concat([df_hist, df_new], ignore_index=True)
-    # format='ISO8601' коректно обробляє і "+00:00", і naive рядки, і мішані формати
+    # ISO8601 parsing handles offset-aware and naive timestamps consistently.
     df_full["datetime"] = pd.to_datetime(df_full["datetime"], format='ISO8601', utc=True)
 
     cutoff_time = now_utc - timedelta(hours=48)

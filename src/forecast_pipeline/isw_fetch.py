@@ -346,7 +346,7 @@ def load_history() -> list[dict]:
 
 def save_history(history: list[dict]) -> None:
     """Persist the most recent 7 daily threat score records to disk (no duplicates)."""
-    # Дедуплікація за датою — залишаємо останній запис для кожної дати
+    # Deduplicate by date and keep the latest copy of each day.
     seen: dict[str, dict] = {}
     for entry in history:
         seen[entry["date"]] = entry
@@ -417,9 +417,9 @@ def build_hourly_rows(
     Each row receives an identical copy of the features since reports are published
     once per day and cover the entire following 24-hour window.
     All datetimes are UTC, floored to the hour.
-    
-    T = остання закрита година (див. process_alarms_final.py).
-    forecast = T+1..T+24
+
+    T is the last fully closed hour.
+    The forecast window is T+1..T+24.
     """
     now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     T = now_utc - timedelta(hours=1)
@@ -463,8 +463,8 @@ def main() -> None:
 
     cache = load_cache()
 
-    # Якщо звіт не змінився — беремо geo_feats з кешу, але LAG/ROLL завжди
-    # перераховуємо з актуальної history (history могла поповнитись новими днями).
+    # If the report is unchanged, reuse cached geo features.
+    # Lag and rolling values are still recomputed from the latest history.
     if cache.get("report_url") == report_url and "geo_feats" in cache:
         log.info("Report is unchanged. Rebuilding 24h grid (lag/roll recalculated from fresh history)...")
         history = load_history()
@@ -477,7 +477,7 @@ def main() -> None:
             lag_roll_feats=lag_roll,
         )
         save_outputs(rows)
-        # Оновлюємо кеш з новим lag_roll
+        # Refresh the cache with the rebuilt lag/rolling values.
         save_cache({**cache, "lag_roll": lag_roll,
                     "last_run_utc": datetime.now(timezone.utc).isoformat()})
         log.info("=== Done (Cached geo, fresh lag/roll). Grid shifted to current time ===")
@@ -522,7 +522,7 @@ def main() -> None:
         "report_url": report_url,
         "publish_hour": publish_hour,
         "geo_feats": geo_feats,
-        "today_threats": today_threats,   # зберігаємо для перерахунку lag_roll при cache hit
+        "today_threats": today_threats,   # kept so lag/roll can be rebuilt on cache hits
         "lag_roll": lag_roll
     })
 

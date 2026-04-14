@@ -132,9 +132,9 @@ def main():
         return
 
     now_utc = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
-    
-    # T = остання ЗАКРИТА година (див. process_alarms_final.py)
-    # forecast: T+1..T+24 — синхронізовано між усіма скриптами
+
+    # T is the last fully closed hour.
+    # The forecast window is aligned as T+1..T+24 across the pipeline.
     T = now_utc - timedelta(hours=1)
     forecast_start = T + timedelta(hours=1)
     forecast_end   = T + timedelta(hours=24)
@@ -144,7 +144,7 @@ def main():
     hist_path = Path(HISTORY_FILE)
     if hist_path.exists():
         df_hist = pd.read_csv(hist_path)
-        # utc=True коректно обробляє і "+00:00" рядки, і naive рядки
+        # utc=True keeps mixed timestamp formats aligned in UTC.
         df_hist["datetime"] = pd.to_datetime(df_hist["datetime"], utc=True)
         print(f"Loaded local history: {len(df_hist)} rows.")
     else:

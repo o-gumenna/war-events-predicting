@@ -18,7 +18,7 @@ def build_master_dataset(weather_file, alarm_file, reddit_file, isw_file, telegr
     df_reddit = df_reddit.rename(columns={'hour_slot': 'datetime'})
     df_reddit['datetime'] = pd.to_datetime(df_reddit['datetime'], utc=True)
 
-    # ISW reports — денна гранулярність з точним часом публікації
+    # ISW reports are daily-level features with an exact publication timestamp.
     df_isw = pd.read_csv(isw_file)
     df_isw['datetime'] = pd.to_datetime(df_isw['datetime'], utc=True)
     df_isw = df_isw.drop(columns=['date'], errors='ignore')
