@@ -1,8 +1,8 @@
-Pipeline overview
+## Pipeline overview
 
 The repository has three main layers.
 
-Frontend:
+### Frontend:
 
 - `alarm_pred/main.jsx`
 - `alarm_pred/ukraine-alerts.jsx`
@@ -11,13 +11,13 @@ Frontend:
 
 The frontend renders the UI and requests forecast data from `/api/forecast`.
 
-Backend API:
+### Backend API:
 
 - `src/saas/app.py`
 
 The API reads `data/predictions/predictions_latest.json` and exposes it through REST endpoints used by the frontend.
 
-Prediction pipeline:
+### Prediction pipeline:
 
 - `src/forecast_pipeline/get_alarms.py`
 - `src/forecast_pipeline/isw_fetch.py`

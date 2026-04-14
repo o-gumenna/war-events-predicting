@@ -1,4 +1,4 @@
-Deployment overview
+## Deployment overview
 
 This project can be deployed as a small server application with two runtime parts:
 
@@ -7,7 +7,7 @@ This project can be deployed as a small server application with two runtime part
 
 The prediction file is generated separately by the batch pipeline and then served by the API.
 
-Current setup
+## Current setup
 
 The current production-style setup for this repository is:
 
@@ -68,7 +68,7 @@ If you run forecasting on the same server, the usual order is:
 3. run `src/forecast_pipeline/batch_predict.py`
 4. let the API serve the latest JSON file
 
-Cron setup
+## Cron setup
 
 In the current setup, source collectors run first, feature merging runs after the source files are refreshed, and batch prediction runs last.
 
