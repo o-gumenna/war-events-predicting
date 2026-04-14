@@ -7,6 +7,15 @@ This project can be deployed as a small server application with two runtime part
 
 The prediction file is generated separately by the batch pipeline and then served by the API.
 
+Current setup
+
+The current production-style setup for this repository is:
+
+- AWS-hosted Ubuntu server
+- cron for scheduled data refresh and prediction jobs
+- Flask API served through Gunicorn
+- frontend served as a static build, typically behind Nginx
+
 Expected deployment flow:
 
 1. install Python dependencies
@@ -59,10 +68,22 @@ If you run forecasting on the same server, the usual order is:
 3. run `src/forecast_pipeline/batch_predict.py`
 4. let the API serve the latest JSON file
 
-If you use cron, keep it simple and explicit. Do not reference helper scripts that are not present in the repository. A direct command is easier to maintain, for example:
+Cron setup
 
-```bash
-10 * * * * cd /path/to/WarEvents && /path/to/venv/bin/python src/forecast_pipeline/batch_predict.py >> data/logs/cron.log 2>&1
+In the current setup, source collectors run first, feature merging runs after the source files are refreshed, and batch prediction runs last.
+
+A clean example on Ubuntu looks like this:
+
+```cron
+PATH=/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+SHELL=/bin/bash
+HOME=/home/ubuntu
+
+*/5 * * * * cd /home/ubuntu/war-events-predicting && venv/bin/python src/forecast_pipeline/get_alarms.py >> /home/ubuntu/war-events-predicting/data/logs/cron.log 2>&1
+1 * * * * cd /home/ubuntu/war-events-predicting && venv/bin/python src/forecast_pipeline/weather_forecast.py >> /home/ubuntu/war-events-predicting/data/logs/cron.log 2>&1
+2 * * * * cd /home/ubuntu/war-events-predicting && venv/bin/python src/forecast_pipeline/process_alarms_final.py >> /home/ubuntu/war-events-predicting/data/logs/cron.log 2>&1
+3 * * * * cd /home/ubuntu/war-events-predicting && venv/bin/python src/forecast_pipeline/telegram_fetch.py >> /home/ubuntu/war-events-predicting/data/logs/cron.log 2>&1
+4 * * * * cd /home/ubuntu/war-events-predicting && venv/bin/python src/forecast_pipeline/isw_fetch.py >> /home/ubuntu/war-events-predicting/data/logs/cron.log 2>&1
+8 * * * * cd /home/ubuntu/war-events-predicting && venv/bin/python src/forecast_pipeline/merge_features.py >> /home/ubuntu/war-events-predicting/data/logs/cron.log 2>&1
+10 * * * * cd /home/ubuntu/war-events-predicting && venv/bin/python src/forecast_pipeline/batch_predict.py >> /home/ubuntu/war-events-predicting/data/logs/cron.log 2>&1
 ```
-
-For this repository, it is better to document the real commands you run than to keep large AWS-specific guides that may become outdated.

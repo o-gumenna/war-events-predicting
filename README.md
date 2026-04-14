@@ -87,5 +87,6 @@ Additional notes:
 
 - `src/data_collection/` and `notebooks/` are useful for research and historical preparation, but they are not required for understanding the main frontend + API flow.
 - the repository contains forecasting output, not an official warning system
+- the current deployment runs on an AWS Ubuntu server and refreshes forecast data through cron jobs
 - if you want deployment details, see `docs/deployment.md`
 - if you want a short architecture overview, see `docs/pipeline.md`
