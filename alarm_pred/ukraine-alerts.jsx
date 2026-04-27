@@ -478,6 +478,36 @@ const UkraineAlerts = () => {
         .threat-badge {
           animation: fadeIn 0.3s ease;
         }
+
+        /* mobile phone adaptation */
+        @media (max-width: 900px) {
+          .main-grid {
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 1rem !important;
+          }
+          .card {
+            min-width: 0 !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+          }
+        }
+        @media (max-width: 600px) {
+          body, html {
+            font-size: 15px !important;
+          }
+          .main-grid {
+            gap: 0.7rem !important;
+          }
+          .card {
+            padding: 0.7rem !important;
+            border-radius: 10px !important;
+          }
+          header, footer {
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+          }
+        }
       `}</style>
 
       <div style={{ padding: 'clamp(1rem, 3vw, 2rem)', maxWidth: '1800px', margin: '0 auto' }}>
@@ -614,7 +644,7 @@ const UkraineAlerts = () => {
         </div>
 
         {/* Main Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '1.5rem' }}>
+        <div className="main-grid" style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: '1.5rem' }}>
           {/* Left Panel - Stats */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
             {/* Summary Stats */}
